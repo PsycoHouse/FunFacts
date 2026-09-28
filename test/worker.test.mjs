@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker, { base64urlToBytes, derivePbkdf2Sha256, RateLimiter, verifyPassword } from "../worker/src/index.js";
-import { pbkdf2Sync, randomBytes, webcrypto } from "node:crypto";
+import worker, { RateLimiter } from "../worker/src/index.js";
+import { webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 globalThis.crypto ||= webcrypto;
@@ -21,11 +21,6 @@ function limiterNamespace() {
 }
 
 function b64url(bytes) { return Buffer.from(bytes).toString("base64url"); }
-async function passwordHash(password) {
-  const salt = randomBytes(16);
-  const hash = pbkdf2Sync(Buffer.from(password), salt, 310000, 32, "sha256");
-  return `pbkdf2_sha256$310000$${salt.toString("base64url")}$${hash.toString("base64url")}`;
-}
 async function signedToken(payload, secret) {
   const body = b64url(encoder.encode(JSON.stringify(payload)));
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -42,7 +37,7 @@ test("frontend sends the documented JSON login fields and content type", async (
 });
 
 test("login distinguishes malformed input from authentication configuration errors", async () => {
-  const validEnv = { ALLOWED_ORIGIN: origin, APP_USER_ID: "AJT", APP_PASSWORD_HASH: await passwordHash("password"), APP_AUTH_SECRET: "secret", RATE_LIMITER: limiterNamespace() };
+  const validEnv = { ALLOWED_ORIGIN: origin, APP_USER_ID: "AJT", APP_PASSWORD: "password", APP_AUTH_SECRET: "secret", RATE_LIMITER: limiterNamespace() };
   const malformed = new Request("https://worker.test/login", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{" });
   assert.equal((await worker.fetch(malformed, validEnv)).status, 401);
   assert.equal((await worker.fetch(request("/login", { username: "AJT", password: "password", extra: true }), validEnv)).status, 401);
@@ -101,7 +96,7 @@ test("CORS defaults to the production Pages origin and is present on errors", as
 });
 
 test("authentication, token validation, daily limit and protected OpenAI call", async () => {
-  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "AJT", APP_PASSWORD_HASH: await passwordHash("correct horse"), APP_AUTH_SECRET: "a-long-test-secret", OPENAI_API_KEY: "server-only", RATE_LIMITER: limiterNamespace() };
+  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "AJT", APP_PASSWORD: "correct horse", APP_AUTH_SECRET: "a-long-test-secret", OPENAI_API_KEY: "server-only", RATE_LIMITER: limiterNamespace() };
   assert.equal((await worker.fetch(request("/fact"), env)).status, 401);
   assert.equal((await worker.fetch(request("/login", { username: "AJT", password: "wrong" }), env)).status, 401);
 
@@ -132,59 +127,17 @@ test("authentication, token validation, daily limit and protected OpenAI call", 
   } finally { globalThis.fetch = originalFetch; Math.random = originalRandom; }
 });
 
-test("verifies Node.js PBKDF2 hashes with decoded base64url bytes", async () => {
-  const hash = await passwordHash(" correct horse ");
-  assert.equal(await verifyPassword(" correct horse ", hash), true);
-  assert.equal(await verifyPassword("correct horse", hash), false);
-
-  assert.deepEqual(base64urlToBytes("-___"), Uint8Array.of(251, 255, 255));
-  assert.deepEqual(base64urlToBytes("AQI="), Uint8Array.of(1, 2));
-  assert.throws(() => base64urlToBytes("AQI+"), /Invalid base64url/);
-});
-
-test("Web Crypto PBKDF2 exactly matches a fixed Node.js test vector", async () => {
-  // Generated once with crypto.pbkdf2Sync(Buffer.from(password, "utf8"),
-  // salt, 310000, 32, "sha256"). It deliberately includes Unicode, leading
-  // whitespace, and a trailing newline so accidental password changes fail.
-  const password = " Pässw🔐rd\n";
-  const salt = base64urlToBytes("AAECAwQFBgcICQoLDA0ODw");
-  const expected = base64urlToBytes("ZYQrAJdwuTW8ZLVfCToLEdgpt3vCnnzt-XUFH-_XyXA");
-  const passwordBytes = new TextEncoder().encode(password);
-
-  assert.equal(passwordBytes.length, 14);
-  assert.equal(salt.length, 16);
-  assert.equal(expected.length, 32);
-  assert.deepEqual(await derivePbkdf2Sha256(passwordBytes, salt, 310000), expected);
-  assert.equal(
-    await verifyPassword(password, "pbkdf2_sha256$310000$AAECAwQFBgcICQoLDA0ODw$ZYQrAJdwuTW8ZLVfCToLEdgpt3vCnnzt-XUFH-_XyXA"),
-    true
-  );
-});
-
-test("login reports whitespace around APP_USER_ID as a configuration error", async () => {
-  const hash = await passwordHash("correct horse");
+test("login compares APP_USER_ID and APP_PASSWORD exactly, including whitespace", async () => {
   const env = {
     ALLOWED_ORIGIN: origin,
     APP_USER_ID: "\n AJT \t",
-    APP_PASSWORD_HASH: `\r\n${hash}\n`,
-    APP_AUTH_SECRET: "  a-long-test-secret\n",
+    APP_PASSWORD: " correct horse ",
+    APP_AUTH_SECRET: "a-long-test-secret",
     RATE_LIMITER: limiterNamespace()
   };
 
-  const login = await worker.fetch(request("/login", { username: "AJT", password: "correct horse" }), env);
-  assert.equal(login.status, 500);
-  assert.deepEqual(await login.json(), { error: "Authentication configuration error" });
-});
-
-test("login rejects PBKDF2 hashes with unsafe iteration counts", async () => {
-  for (const iterations of [99999, 2000001]) {
-    const validHash = await passwordHash("password");
-    const unsafeHash = validHash.replace("$310000$", `$${iterations}$`);
-    const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "AJT", APP_PASSWORD_HASH: unsafeHash, APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };
-    const response = await worker.fetch(request("/login", { username: "AJT", password: "password" }), env);
-    assert.equal(response.status, 500);
-    assert.deepEqual(await response.json(), { error: "Authentication configuration error" });
-  }
+  assert.equal((await worker.fetch(request("/login", { username: "AJT", password: "correct horse" }), env)).status, 401);
+  assert.equal((await worker.fetch(request("/login", { username: env.APP_USER_ID, password: env.APP_PASSWORD }), env)).status, 200);
 });
 
 test("location facts validate coordinates and add local context without exposing them in the result", async () => {

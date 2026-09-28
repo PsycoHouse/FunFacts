@@ -5,7 +5,6 @@ const FACT_LIMIT = 20;
 const LOGIN_LIMIT = 10;
 const SESSION_SECONDS = 24 * 60 * 60;
 const DEFAULT_ALLOWED_ORIGIN = "https://psycohouse.github.io";
-const EXPECTED_USER_ID = "AJT";
 
 export default {
   async fetch(request, env) {
@@ -31,13 +30,9 @@ export default {
 };
 
 async function login(request, env, headers) {
-  const rawConfiguredUser = typeof env.APP_USER_ID === "string" ? env.APP_USER_ID : "";
-  const configuredUser = rawConfiguredUser.trim();
-  const configuredPasswordHash = normalizedSecret(env.APP_PASSWORD_HASH);
-  const authSecret = normalizedSecret(env.APP_AUTH_SECRET);
-  const userConfigured = rawConfiguredUser.length > 0;
-  const passwordHashConfigured = configuredPasswordHash.length > 0;
-  const passwordHashFormatValid = validPasswordHashFormat(configuredPasswordHash);
+  const configuredUser = typeof env.APP_USER_ID === "string" ? env.APP_USER_ID : "";
+  const configuredPassword = typeof env.APP_PASSWORD === "string" ? env.APP_PASSWORD : "";
+  const authSecret = typeof env.APP_AUTH_SECRET === "string" ? env.APP_AUTH_SECRET : "";
 
   let body;
   let bodyParsed = false;
@@ -49,40 +44,16 @@ async function login(request, env, headers) {
   const passwordPresent = bodyParsed && typeof body.password === "string";
   const exactFields = bodyParsed && Object.keys(body).sort().join(",") === "password,username";
   const username = usernamePresent ? body.username : "";
-  const usernameMatches = usernamePresent && await constantTimeEqual(username, configuredUser);
-  let passwordVerified = false;
+  const password = passwordPresent ? body.password : "";
 
-  // Only non-sensitive booleans and lengths are logged. In particular, never
-  // log the request fields, configured identifiers, hashes, or passwords.
-  const logDiagnostics = () => console.log("Login diagnostics", {
-    "request body parsed": bodyParsed,
-    "username field present": usernamePresent,
-    "password field present": passwordPresent,
-    "username received length": username.length,
-    "expected username length": configuredUser.length,
-    "username matches": usernameMatches,
-    "APP_USER_ID configured": userConfigured,
-    "APP_USER_ID has surrounding whitespace": rawConfiguredUser !== configuredUser,
-    "APP_PASSWORD_HASH configured": passwordHashConfigured,
-    "password hash format valid": passwordHashFormatValid,
-    "password verification result": passwordVerified
-  });
-
-  // A missing, whitespace-padded, or unexpected user id is a deployment error,
-  // not a failed login. This application intentionally has exactly one user.
-  const configurationValid = userConfigured
-    && rawConfiguredUser === configuredUser
-    && configuredUser === EXPECTED_USER_ID
-    && passwordHashConfigured
-    && passwordHashFormatValid
+  const configurationValid = configuredUser.length > 0
+    && configuredPassword.length > 0
     && authSecret.length > 0
     && Boolean(env.RATE_LIMITER);
   if (!configurationValid) {
-    logDiagnostics();
     return json({ error: "Authentication configuration error" }, 500, headers);
   }
   if (!bodyParsed || !exactFields || !usernamePresent || !passwordPresent) {
-    logDiagnostics();
     return json({ error: "Ungültige Zugangsdaten" }, 401, headers);
   }
 
@@ -92,9 +63,9 @@ async function login(request, env, headers) {
   const current = await limit(env, "peek", key, LOGIN_LIMIT, 16 * 60);
   if (!current.allowed) return json({ error: "Zu viele Login-Versuche. Bitte später erneut versuchen" }, 429, headers);
 
-  passwordVerified = await verifyPassword(body.password, configuredPasswordHash);
-  logDiagnostics();
-  if (!usernameMatches || !passwordVerified) {
+  const usernameMatches = await constantTimeEqual(username, configuredUser);
+  const passwordMatches = await constantTimeEqual(password, configuredPassword);
+  if (!usernameMatches || !passwordMatches) {
     const result = await limit(env, "increment", key, LOGIN_LIMIT, 16 * 60);
     return result.allowed ? json({ error: "Ungültige Zugangsdaten" }, 401, headers) : json({ error: "Zu viele Login-Versuche. Bitte später erneut versuchen" }, 429, headers);
   }
@@ -182,75 +153,6 @@ async function hmac(value, secret) {
   return new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
 }
 
-export async function verifyPassword(password, stored) {
-  const parts = typeof stored === "string" ? stored.split("$") : [];
-  const [algorithm, roundsText, saltBase64Url, hashBase64Url] = parts;
-  const rounds = Number(roundsText);
-  const algorithmRecognized = algorithm === "pbkdf2_sha256";
-  // Accept hashes created by older documented versions of this project, which
-  // used 100,000 rounds. New hashes use 310,000 rounds (see README), while the
-  // upper bound prevents an accidentally malformed secret from tying up a
-  // Worker request for an excessive amount of time.
-  const iterationsValid = Number.isInteger(rounds) && rounds >= 100000 && rounds <= 2000000;
-  let salt;
-  let expected;
-  try { salt = base64urlToBytes(saltBase64Url); } catch { salt = null; }
-  try { expected = base64urlToBytes(hashBase64Url); } catch { expected = null; }
-  const saltParsed = Boolean(salt?.length);
-  const storedHashParsed = expected?.length === 32;
-  const passwordIsString = typeof password === "string";
-  const passwordBytes = passwordIsString ? new TextEncoder().encode(password) : new Uint8Array();
-  const formatValid = passwordIsString && parts.length === 4 && algorithmRecognized && iterationsValid && saltParsed && storedHashParsed;
-
-  let verified = false;
-  let derived = null;
-  if (formatValid) {
-    try {
-      derived = await derivePbkdf2Sha256(passwordBytes, salt, rounds);
-      verified = constantTimeBytes(derived, expected);
-    } catch { verified = false; }
-  }
-
-  // Never log credential contents. These lengths make encoding, base64url
-  // decoding, and the bits-versus-bytes boundary observable in Worker logs.
-  console.log("Password verification diagnostics", {
-    "password length": passwordIsString ? password.length : 0,
-    "password UTF-8 byte length": passwordBytes.length,
-    "salt byte length": salt?.length ?? 0,
-    "stored hash byte length": expected?.length ?? 0,
-    "derived hash byte length": derived?.length ?? 0,
-    "iterations": Number.isInteger(rounds) ? rounds : 0,
-    "derived equals stored": verified
-  });
-  return verified;
-}
-
-export async function derivePbkdf2Sha256(passwordBytes, saltBytes, iterations) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    passwordBytes,
-    { name: "PBKDF2" },
-    false,
-    ["deriveBits"]
-  );
-  const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", hash: "SHA-256", salt: saltBytes, iterations },
-    key,
-    256
-  );
-  return new Uint8Array(bits);
-}
-
-function validPasswordHashFormat(stored) {
-  const parts = typeof stored === "string" ? stored.split("$") : [];
-  if (parts.length !== 4 || parts[0] !== "pbkdf2_sha256") return false;
-  const rounds = Number(parts[1]);
-  if (!Number.isInteger(rounds) || rounds < 100000 || rounds > 2000000) return false;
-  try {
-    return base64urlToBytes(parts[2]).length > 0 && base64urlToBytes(parts[3]).length === 32;
-  } catch { return false; }
-}
-
 async function constantTimeEqual(a, b) {
   const left = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(a)));
   const right = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(b)));
@@ -271,7 +173,6 @@ export function base64urlToBytes(value) {
   const binary = atob(normalized);
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
-function normalizedSecret(value) { return typeof value === "string" ? value.trim() : ""; }
 function originAllowed(origin, allowed) {
   if (!origin || !allowed) return false;
   try {
