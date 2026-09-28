@@ -159,3 +159,58 @@ test("location facts validate coordinates and add local context without exposing
     assert.equal((await response.json()).category, "Vor Ort");
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("fact uses the Responses API request shape and parses nested output text", async () => {
+  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "AJT", APP_AUTH_SECRET: "secret", OPENAI_API_KEY: "server-only", OPENAI_MODEL: "gpt-5-mini", RATE_LIMITER: limiterNamespace() };
+  const token = await signedToken({ user: "AJT", exp: Math.floor(Date.now() / 1000) + 60 }, env.APP_AUTH_SECRET);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, "https://api.openai.com/v1/responses");
+    assert.equal(init.method, "POST");
+    assert.equal(init.headers.Authorization, "Bearer server-only");
+    assert.equal(init.headers["Content-Type"], "application/json");
+    const payload = JSON.parse(init.body);
+    assert.equal(payload.model, "gpt-5-mini");
+    assert.equal(payload.text.format.type, "json_schema");
+    assert.equal(payload.text.format.strict, true);
+    assert.equal("max_output_tokens" in payload, false);
+    return new Response(JSON.stringify({
+      output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({ id: "moon_dust", fact: "Mondstaub riecht nach Aussagen von Astronauten wie Schießpulver.", category: "Weltraum" }) }] }]
+    }), { status: 200 });
+  };
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    const response = await worker.fetch(request("/fact", {}, token), env);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).id, "moon_dust");
+  } finally { globalThis.fetch = originalFetch; Math.random = originalRandom; }
+});
+
+test("fact safely logs and preserves actionable OpenAI error statuses", async () => {
+  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "AJT", APP_AUTH_SECRET: "secret", OPENAI_API_KEY: "do-not-log-this-key", RATE_LIMITER: limiterNamespace() };
+  const token = await signedToken({ user: "AJT", exp: Math.floor(Date.now() / 1000) + 60 }, env.APP_AUTH_SECRET);
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const originalError = console.error;
+  const logs = [];
+  console.log = (...values) => logs.push(values);
+  console.error = (...values) => logs.push(values);
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: { type: "invalid_request_error", code: "model_not_found", message: "The requested model does not exist" } }), { status: 404 });
+  try {
+    const response = await worker.fetch(request("/fact", {}, token), env);
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { error: "Fact konnte nicht erzeugt werden" });
+    const serializedLogs = JSON.stringify(logs);
+    assert.match(serializedLogs, /OPENAI_API_KEY configured: true/);
+    assert.match(serializedLogs, /OpenAI response status: 404/);
+    assert.match(serializedLogs, /model_not_found/);
+    assert.match(serializedLogs, /The requested model does not exist/);
+    assert.doesNotMatch(serializedLogs, /do-not-log-this-key/);
+    assert.doesNotMatch(serializedLogs, /Authorization/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    console.error = originalError;
+  }
+});
