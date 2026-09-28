@@ -42,7 +42,7 @@ jobs:
       WORKER_NAME: ${{ secrets.CLOUDFLARE_WORKER_NAME || 'random-fact-api' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       APP_USER_ID: ${{ secrets.APP_USER_ID }}
-      APP_PASSWORD_HASH: ${{ secrets.APP_PASSWORD_HASH }}
+      APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
       APP_AUTH_SECRET: ${{ secrets.APP_AUTH_SECRET }}
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
           set +x
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "CLOUDFLARE_API_TOKEN vorhanden: false"; exit 1; }
           test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "CLOUDFLARE_ACCOUNT_ID vorhanden: false"; exit 1; }
-          for name in OPENAI_API_KEY APP_USER_ID APP_PASSWORD_HASH APP_AUTH_SECRET; do
+          for name in OPENAI_API_KEY APP_USER_ID APP_PASSWORD APP_AUTH_SECRET; do
             if test -n "${!name}"; then
               echo "$name vorhanden: true"
             else
@@ -73,7 +73,7 @@ jobs:
           set +x
           printf '%s' "$OPENAI_API_KEY" | npx --yes wrangler@4 secret put OPENAI_API_KEY --name "$WORKER_NAME"
           printf '%s' "$APP_USER_ID" | npx --yes wrangler@4 secret put APP_USER_ID --name "$WORKER_NAME"
-          printf '%s' "$APP_PASSWORD_HASH" | npx --yes wrangler@4 secret put APP_PASSWORD_HASH --name "$WORKER_NAME"
+          printf '%s' "$APP_PASSWORD" | npx --yes wrangler@4 secret put APP_PASSWORD --name "$WORKER_NAME"
           printf '%s' "$APP_AUTH_SECRET" | npx --yes wrangler@4 secret put APP_AUTH_SECRET --name "$WORKER_NAME"
 
   deploy-pages:
