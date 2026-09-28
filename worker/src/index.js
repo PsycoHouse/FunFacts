@@ -5,6 +5,7 @@ const FACT_LIMIT = 20;
 const LOGIN_LIMIT = 10;
 const SESSION_SECONDS = 24 * 60 * 60;
 const DEFAULT_ALLOWED_ORIGIN = "https://psycohouse.github.io";
+const EXPECTED_USER_ID = "AJT";
 
 export default {
   async fetch(request, env) {
@@ -30,42 +31,70 @@ export default {
 };
 
 async function login(request, env, headers) {
-  // GitHub/Cloudflare secrets are frequently pasted with a trailing newline.
-  // Ignore surrounding whitespace for identifiers and the serialized hash,
-  // but never alter the password entered by the user.
-  const configuredUser = normalizedSecret(env.APP_USER_ID);
+  const rawConfiguredUser = typeof env.APP_USER_ID === "string" ? env.APP_USER_ID : "";
+  const configuredUser = rawConfiguredUser.trim();
   const configuredPasswordHash = normalizedSecret(env.APP_PASSWORD_HASH);
   const authSecret = normalizedSecret(env.APP_AUTH_SECRET);
-  const configured = {
-    APP_USER_ID: configuredUser.length > 0,
-    APP_PASSWORD_HASH: configuredPasswordHash.length > 0,
-    APP_AUTH_SECRET: authSecret.length > 0
-  };
-  console.log(`APP_USER_ID vorhanden: ${configured.APP_USER_ID}`);
-  console.log(`APP_PASSWORD_HASH vorhanden: ${configured.APP_PASSWORD_HASH}`);
-  console.log(`APP_AUTH_SECRET vorhanden: ${configured.APP_AUTH_SECRET}`);
-  if (!configured.APP_USER_ID || !configured.APP_PASSWORD_HASH || !configured.APP_AUTH_SECRET || !env.RATE_LIMITER) return json({ error: "Server ist nicht konfiguriert" }, 500, headers);
+  const userConfigured = rawConfiguredUser.length > 0;
+  const passwordHashConfigured = configuredPasswordHash.length > 0;
+  const passwordHashFormatValid = validPasswordHashFormat(configuredPasswordHash);
+
+  let body;
+  let bodyParsed = false;
+  try {
+    body = await request.json();
+    bodyParsed = Boolean(body) && typeof body === "object" && !Array.isArray(body);
+  } catch { body = null; }
+  const usernamePresent = bodyParsed && typeof body.username === "string";
+  const passwordPresent = bodyParsed && typeof body.password === "string";
+  const exactFields = bodyParsed && Object.keys(body).sort().join(",") === "password,username";
+  const username = usernamePresent ? body.username : "";
+  const usernameMatches = usernamePresent && await constantTimeEqual(username, configuredUser);
+  let passwordVerified = false;
+
+  // Only non-sensitive booleans and lengths are logged. In particular, never
+  // log the request fields, configured identifiers, hashes, or passwords.
+  const logDiagnostics = () => console.log("Login diagnostics", {
+    "request body parsed": bodyParsed,
+    "username field present": usernamePresent,
+    "password field present": passwordPresent,
+    "username received length": username.length,
+    "expected username length": configuredUser.length,
+    "username matches": usernameMatches,
+    "APP_USER_ID configured": userConfigured,
+    "APP_USER_ID has surrounding whitespace": rawConfiguredUser !== configuredUser,
+    "APP_PASSWORD_HASH configured": passwordHashConfigured,
+    "password hash format valid": passwordHashFormatValid,
+    "password verification result": passwordVerified
+  });
+
+  // A missing, whitespace-padded, or unexpected user id is a deployment error,
+  // not a failed login. This application intentionally has exactly one user.
+  const configurationValid = userConfigured
+    && rawConfiguredUser === configuredUser
+    && configuredUser === EXPECTED_USER_ID
+    && passwordHashConfigured
+    && passwordHashFormatValid
+    && authSecret.length > 0
+    && Boolean(env.RATE_LIMITER);
+  if (!configurationValid) {
+    logDiagnostics();
+    return json({ error: "Authentication configuration error" }, 500, headers);
+  }
+  if (!bodyParsed || !exactFields || !usernamePresent || !passwordPresent) {
+    logDiagnostics();
+    return json({ error: "Ungültige Zugangsdaten" }, 401, headers);
+  }
+
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   const window = Math.floor(Date.now() / (15 * 60 * 1000));
   const key = `login:${ip}:${window}`;
   const current = await limit(env, "peek", key, LOGIN_LIMIT, 16 * 60);
   if (!current.allowed) return json({ error: "Zu viele Login-Versuche. Bitte später erneut versuchen" }, 429, headers);
 
-  let body;
-  try { body = await request.json(); } catch {
-    console.log("username received: false");
-    console.log("username matches: false");
-    return json({ error: "Ungültige Zugangsdaten" }, 401, headers);
-  }
-  const usernameReceived = typeof body?.username === "string";
-  const username = usernameReceived ? body.username.trim() : "";
-  const usernameOk = usernameReceived && await constantTimeEqual(username, configuredUser);
-  console.log(`username received: ${usernameReceived}`);
-  console.log(`username matches: ${usernameOk}`);
-  const passwordReceived = typeof body?.password === "string";
-  const passwordVerified = await verifyPassword(passwordReceived ? body.password : "", configuredPasswordHash);
-  const passwordOk = passwordReceived && passwordVerified;
-  if (!usernameOk || !passwordOk) {
+  passwordVerified = await verifyPassword(body.password, configuredPasswordHash);
+  logDiagnostics();
+  if (!usernameMatches || !passwordVerified) {
     const result = await limit(env, "increment", key, LOGIN_LIMIT, 16 * 60);
     return result.allowed ? json({ error: "Ungültige Zugangsdaten" }, 401, headers) : json({ error: "Zu viele Login-Versuche. Bitte später erneut versuchen" }, 429, headers);
   }
@@ -171,12 +200,6 @@ export async function verifyPassword(password, stored) {
   const storedHashParsed = expected?.length === 32;
   const formatValid = parts.length === 4 && algorithmRecognized && iterationsValid && saltParsed && storedHashParsed;
 
-  console.log(`hash format valid: ${formatValid}`);
-  console.log(`algorithm recognized: ${algorithmRecognized}`);
-  console.log(`iterations: ${Number.isInteger(rounds) ? rounds : 0}`);
-  console.log(`salt parsed: ${saltParsed}`);
-  console.log(`stored hash parsed: ${storedHashParsed}`);
-
   let verified = false;
   if (formatValid) {
     try {
@@ -185,8 +208,17 @@ export async function verifyPassword(password, stored) {
       verified = constantTimeBytes(new Uint8Array(bits), expected);
     } catch { verified = false; }
   }
-  console.log(`password verification result: ${verified}`);
   return verified;
+}
+
+function validPasswordHashFormat(stored) {
+  const parts = typeof stored === "string" ? stored.split("$") : [];
+  if (parts.length !== 4 || parts[0] !== "pbkdf2_sha256") return false;
+  const rounds = Number(parts[1]);
+  if (!Number.isInteger(rounds) || rounds < 100000 || rounds > 2000000) return false;
+  try {
+    return base64urlToBytes(parts[2]).length > 0 && base64urlToBytes(parts[3]).length === 32;
+  } catch { return false; }
 }
 
 async function constantTimeEqual(a, b) {
