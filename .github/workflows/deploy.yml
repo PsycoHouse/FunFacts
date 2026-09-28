@@ -49,6 +49,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Erforderliche Secrets prüfen
+        shell: bash
+        run: |
+          set +x
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "CLOUDFLARE_API_TOKEN vorhanden: false"; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "CLOUDFLARE_ACCOUNT_ID vorhanden: false"; exit 1; }
+          for name in OPENAI_API_KEY APP_USER_ID APP_PASSWORD_HASH APP_AUTH_SECRET; do
+            if test -n "${!name}"; then
+              echo "$name vorhanden: true"
+            else
+              echo "$name vorhanden: false"
+              exit 1
+            fi
+          done
       - name: Worker und Durable Object bereitstellen
         working-directory: worker
         run: npx --yes wrangler@4 deploy --name "$WORKER_NAME" --var "ALLOWED_ORIGIN:https://${{ github.repository_owner }}.github.io"

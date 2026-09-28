@@ -23,8 +23,13 @@ function b64url(bytes) { return Buffer.from(bytes).toString("base64url"); }
 async function passwordHash(password) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const hash = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 100000 }, key, 256);
-  return `pbkdf2_sha256$100000$${b64url(salt)}$${b64url(new Uint8Array(hash))}`;
+  const hash = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 310000 }, key, 256);
+  return `pbkdf2_sha256$310000$${b64url(salt)}$${b64url(new Uint8Array(hash))}`;
+}
+async function textSaltPasswordHash(password, salt = "text-salt", iterations = 310000) {
+  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const hash = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: encoder.encode(salt), iterations }, key, 256);
+  return `pbkdf2_sha256$${iterations}$${salt}$${Buffer.from(hash).toString("base64")}`;
 }
 async function signedToken(payload, secret) {
   const body = b64url(encoder.encode(JSON.stringify(payload)));
@@ -109,6 +114,20 @@ test("authentication, token validation, daily limit and protected OpenAI call", 
     assert.equal(limited.status, 429);
     assert.deepEqual(await limited.json(), { error: "Tageslimit erreicht", remaining: 0 });
   } finally { globalThis.fetch = originalFetch; Math.random = originalRandom; }
+});
+
+test("login supports a 310000-round text-salt format and trims only the username", async () => {
+  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: await textSaltPasswordHash(" correct horse "), APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };
+  const login = await worker.fetch(request("/login", { username: "  friend\t", password: " correct horse " }), env);
+  assert.equal(login.status, 200);
+  assert.ok((await login.json()).token);
+  assert.equal((await worker.fetch(request("/login", { username: "FRIEND", password: " correct horse " }), env)).status, 401);
+  assert.equal((await worker.fetch(request("/login", { username: "friend", password: "correct horse" }), env)).status, 401);
+});
+
+test("login rejects PBKDF2 hashes with parameters other than 310000 rounds", async () => {
+  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: await textSaltPasswordHash("password", "text-salt", 100000), APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };
+  assert.equal((await worker.fetch(request("/login", { username: "friend", password: "password" }), env)).status, 401);
 });
 
 test("location facts validate coordinates and add local context without exposing them in the result", async () => {
