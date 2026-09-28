@@ -75,6 +75,7 @@ async function login(request, env, headers) {
 }
 
 async function fact(request, env, headers) {
+  console.log(`OPENAI_API_KEY configured: ${typeof env.OPENAI_API_KEY === "string" && env.OPENAI_API_KEY.length > 0}`);
   if (!env.OPENAI_API_KEY || !env.APP_AUTH_SECRET || !env.RATE_LIMITER) return json({ error: "Server ist nicht konfiguriert" }, 500, headers);
   const auth = request.headers.get("Authorization") || "";
   const payload = auth.startsWith("Bearer ") ? await verifyToken(auth.slice(7), env.APP_AUTH_SECRET) : null;
@@ -92,8 +93,9 @@ async function fact(request, env, headers) {
     return json({ ...result, remaining: FACT_LIMIT - reservation.count }, 200, headers);
   } catch (error) {
     await limit(env, "decrement", key, FACT_LIMIT, 2 * 86400);
-    console.error("Fact generation failed", error instanceof Error ? error.message : "unknown");
-    return json({ error: "Fact konnte nicht erzeugt werden" }, 502, headers);
+    const status = error instanceof OpenAIError && [400, 401, 404, 429].includes(error.status) ? error.status : 502;
+    console.error("Fact generation failed", safeLogValue(error instanceof Error ? error.message : "unknown"));
+    return json({ error: "Fact konnte nicht erzeugt werden" }, status, headers);
   }
 }
 
@@ -102,6 +104,7 @@ async function createFact(env, location) {
   const locationPrompt = location
     ? `Der Fact muss einen konkreten, interessanten Bezug zur Umgebung der Koordinaten ${location.latitude}, ${location.longitude} haben. Nenne nach Möglichkeit den betreffenden Ort oder die Region, aber niemals die Koordinaten.`
     : "";
+  console.log("OpenAI request started");
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
@@ -109,16 +112,73 @@ async function createFact(env, location) {
       model: env.OPENAI_MODEL || "gpt-5-mini",
       instructions: "Antworte ausschließlich mit dem verlangten JSON. Erfinde keine Behauptungen.",
       input: `Erzeuge einen überraschenden, sachlichen und möglichst korrekten deutschen Fakt der Kategorie ${category}. ${locationPrompt} Maximal zwei kurze Sätze, keine Meinung oder Allgemeinplätze. Die id ist eine beschreibende englische snake_case-ID. category muss exakt ${category} sein.`,
-      max_output_tokens: 180,
       text: { format: { type: "json_schema", name: "random_fact", strict: true, schema: { type: "object", additionalProperties: false, properties: { id: { type: "string", pattern: "^[a-z0-9_]{3,80}$" }, fact: { type: "string", minLength: 10, maxLength: 500 }, category: { type: "string", enum: [category] } }, required: ["id", "fact", "category"] } } }
     })
   });
-  if (!response.ok) throw new Error(`OpenAI status ${response.status}`);
-  const data = await response.json();
-  const text = data.output_text || data.output?.flatMap((item) => item.content || []).find((item) => item.type === "output_text")?.text;
-  const value = JSON.parse(text || "");
+  console.log(`OpenAI response status: ${response.status}`);
+  console.log(`OpenAI response ok: ${response.ok}`);
+
+  const responseBody = await response.text();
+  let data;
+  try {
+    data = JSON.parse(responseBody);
+    console.log("OpenAI response parsed: true");
+  } catch {
+    console.log("OpenAI response parsed: false");
+    if (!response.ok) logOpenAIError(response.status, {});
+    throw new OpenAIError(response.status, "OpenAI returned invalid JSON");
+  }
+
+  if (!response.ok) {
+    const apiError = data && typeof data.error === "object" && data.error ? data.error : {};
+    logOpenAIError(response.status, apiError);
+    throw new OpenAIError(response.status, safeLogValue(apiError.message || "OpenAI request failed"));
+  }
+
+  const text = extractOutputText(data);
+  let value;
+  try {
+    value = JSON.parse(text);
+    console.log("Fact JSON parsed: true");
+  } catch {
+    console.log("Fact JSON parsed: false");
+    throw new OpenAIError(502, data?.status === "incomplete" ? "OpenAI response was incomplete" : "OpenAI output was not valid JSON");
+  }
   if (!value || !/^[a-z0-9_]{3,80}$/.test(value.id) || typeof value.fact !== "string" || value.fact.length < 10 || value.fact.length > 500 || value.category !== category) throw new Error("Invalid OpenAI response");
   return value;
+}
+
+class OpenAIError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.name = "OpenAIError";
+    this.status = status;
+  }
+}
+
+function extractOutputText(data) {
+  if (typeof data?.output_text === "string" && data.output_text.length > 0) return data.output_text;
+  if (!Array.isArray(data?.output)) return "";
+  for (const output of data.output) {
+    if (!Array.isArray(output?.content)) continue;
+    for (const content of output.content) {
+      if (content?.type === "output_text" && typeof content.text === "string" && content.text.length > 0) return content.text;
+    }
+  }
+  return "";
+}
+
+function logOpenAIError(status, error) {
+  console.error("OpenAI error", {
+    status,
+    type: safeLogValue(error.type),
+    code: safeLogValue(error.code),
+    message: safeLogValue(error.message || "Unknown OpenAI error")
+  });
+}
+
+function safeLogValue(value) {
+  return typeof value === "string" ? value.replace(/[\r\n]/g, " ").slice(0, 500) : "unknown";
 }
 
 function validFactBody(body) {
