@@ -141,7 +141,7 @@ function enableLocation() {
   }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
 }
 
-function updateDailyCounter(remaining) { if (Number.isInteger(remaining)) $("#daily-counter").textContent = `${20 - remaining} / 20 heute genutzt`; }
+function updateDailyCounter(remaining) { if (Number.isInteger(remaining)) $("#daily-counter").textContent = `${50 - remaining} / 50 heute genutzt`; }
 function updateHistoryCounter() { $("#counter").textContent = `${seenIds.size} Facts insgesamt gesehen`; }
 function logout(message = "") {
   token = "";

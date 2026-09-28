@@ -1,7 +1,7 @@
 const CATEGORIES = ["Weltraum", "Tiere", "Biologie", "Mensch", "Geschichte", "Wissenschaft", "Technik", "Erde", "Kultur", "Kurioses"];
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const FACT_LIMIT = 20;
+const FACT_LIMIT = 50;
 const LOGIN_LIMIT = 10;
 const SESSION_SECONDS = 24 * 60 * 60;
 const DEFAULT_ALLOWED_ORIGIN = "https://psycohouse.github.io";

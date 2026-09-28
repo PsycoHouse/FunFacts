@@ -13,7 +13,7 @@ Ein Login in einer statischen GitHub-Pages-Seite **allein schützt keinen API-Ke
 - Der Worker vergleicht Benutzername und Passwort ausschließlich serverseitig mit `APP_USER_ID` und `APP_PASSWORD`. Der Vergleich erfolgt über SHA-256-Digests mit einem konstantzeitähnlichen Bytevergleich.
 - Ein HMAC-SHA-256-signiertes Token gilt 24 Stunden und liegt nur in `sessionStorage`.
 - Nur Fact-IDs liegen als unkritische Historie in `localStorage`.
-- Ein SQLite Durable Object limitiert atomar auf 20 erfolgreiche Facts je Benutzer/UTC-Tag und zehn fehlgeschlagene Logins je IP/15 Minuten. Schlägt OpenAI fehl, wird die Reservierung zurückgenommen.
+- Ein SQLite Durable Object limitiert atomar auf 50 erfolgreiche Facts je Benutzer/UTC-Tag und zehn fehlgeschlagene Logins je IP/15 Minuten. Schlägt OpenAI fehl, wird die Reservierung zurückgenommen.
 - CORS erlaubt ausschließlich `ALLOWED_ORIGIN`; `/fact` verlangt trotzdem immer ein gültiges Token.
 - Es werden weder Passwörter/Tokens noch OpenAI-Antworten protokolliert.
 - Die optionale Standortfunktion wird erst nach ausdrücklicher Freigabe aktiv. Das Frontend rundet Koordinaten auf drei Nachkommastellen; sie werden nur für die aktuelle Sitzung im Arbeitsspeicher gehalten und beim Fact-Abruf an den Worker sowie zur Faktgenerierung an OpenAI übertragen.
