@@ -4,13 +4,15 @@ const decoder = new TextDecoder();
 const FACT_LIMIT = 20;
 const LOGIN_LIMIT = 10;
 const SESSION_SECONDS = 24 * 60 * 60;
+const DEFAULT_ALLOWED_ORIGIN = "https://psycohouse.github.io";
 
 export default {
   async fetch(request, env) {
     const origin = request.headers.get("Origin") || "";
-    const headers = corsHeaders(origin, env.ALLOWED_ORIGIN);
-    if (request.method === "OPTIONS") return originAllowed(origin, env.ALLOWED_ORIGIN) ? new Response(null, { status: 204, headers }) : json({ error: "Origin nicht erlaubt" }, 403, headers);
-    if (!originAllowed(origin, env.ALLOWED_ORIGIN)) return json({ error: "Origin nicht erlaubt" }, 403, headers);
+    const allowedOrigin = new URL(env.ALLOWED_ORIGIN || DEFAULT_ALLOWED_ORIGIN).origin;
+    const headers = corsHeaders(allowedOrigin);
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
+    if (!originAllowed(origin, allowedOrigin)) return json({ error: "Origin nicht erlaubt" }, 403, headers);
 
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") return json({ status: "ok" }, 200, headers);
@@ -154,7 +156,17 @@ function originAllowed(origin, allowed) {
     return new URL(origin).origin === new URL(allowed).origin;
   } catch { return false; }
 }
-function corsHeaders(origin, allowed) { const headers = { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type", "Cache-Control": "no-store", Vary: "Origin" }; if (originAllowed(origin, allowed)) headers["Access-Control-Allow-Origin"] = origin; return headers; }
+function corsHeaders(allowedOrigin) {
+  return {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Max-Age": "86400",
+    "Cache-Control": "no-store",
+    Vary: "Origin"
+  };
+}
 function json(value, status, headers) { return new Response(JSON.stringify(value), { status, headers }); }
 async function limit(env, action, key, max, ttl) { const id = env.RATE_LIMITER.idFromName("global"); return (await env.RATE_LIMITER.get(id).fetch("https://limiter.internal/", { method: "POST", body: JSON.stringify({ action, key, max, ttl }) })).json(); }
 
