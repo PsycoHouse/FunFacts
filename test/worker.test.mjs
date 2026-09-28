@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker, { base64urlToBytes, RateLimiter, verifyPassword } from "../worker/src/index.js";
+import worker, { base64urlToBytes, derivePbkdf2Sha256, RateLimiter, verifyPassword } from "../worker/src/index.js";
 import { pbkdf2Sync, randomBytes, webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
@@ -140,6 +140,25 @@ test("verifies Node.js PBKDF2 hashes with decoded base64url bytes", async () => 
   assert.deepEqual(base64urlToBytes("-___"), Uint8Array.of(251, 255, 255));
   assert.deepEqual(base64urlToBytes("AQI="), Uint8Array.of(1, 2));
   assert.throws(() => base64urlToBytes("AQI+"), /Invalid base64url/);
+});
+
+test("Web Crypto PBKDF2 exactly matches a fixed Node.js test vector", async () => {
+  // Generated once with crypto.pbkdf2Sync(Buffer.from(password, "utf8"),
+  // salt, 310000, 32, "sha256"). It deliberately includes Unicode, leading
+  // whitespace, and a trailing newline so accidental password changes fail.
+  const password = " Pässw🔐rd\n";
+  const salt = base64urlToBytes("AAECAwQFBgcICQoLDA0ODw");
+  const expected = base64urlToBytes("ZYQrAJdwuTW8ZLVfCToLEdgpt3vCnnzt-XUFH-_XyXA");
+  const passwordBytes = new TextEncoder().encode(password);
+
+  assert.equal(passwordBytes.length, 14);
+  assert.equal(salt.length, 16);
+  assert.equal(expected.length, 32);
+  assert.deepEqual(await derivePbkdf2Sha256(passwordBytes, salt, 310000), expected);
+  assert.equal(
+    await verifyPassword(password, "pbkdf2_sha256$310000$AAECAwQFBgcICQoLDA0ODw$ZYQrAJdwuTW8ZLVfCToLEdgpt3vCnnzt-XUFH-_XyXA"),
+    true
+  );
 });
 
 test("login reports whitespace around APP_USER_ID as a configuration error", async () => {

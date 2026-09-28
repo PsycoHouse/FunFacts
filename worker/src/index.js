@@ -198,17 +198,47 @@ export async function verifyPassword(password, stored) {
   try { expected = base64urlToBytes(hashBase64Url); } catch { expected = null; }
   const saltParsed = Boolean(salt?.length);
   const storedHashParsed = expected?.length === 32;
-  const formatValid = parts.length === 4 && algorithmRecognized && iterationsValid && saltParsed && storedHashParsed;
+  const passwordIsString = typeof password === "string";
+  const passwordBytes = passwordIsString ? new TextEncoder().encode(password) : new Uint8Array();
+  const formatValid = passwordIsString && parts.length === 4 && algorithmRecognized && iterationsValid && saltParsed && storedHashParsed;
 
   let verified = false;
+  let derived = null;
   if (formatValid) {
     try {
-      const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-      const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: rounds }, key, 256);
-      verified = constantTimeBytes(new Uint8Array(bits), expected);
+      derived = await derivePbkdf2Sha256(passwordBytes, salt, rounds);
+      verified = constantTimeBytes(derived, expected);
     } catch { verified = false; }
   }
+
+  // Never log credential contents. These lengths make encoding, base64url
+  // decoding, and the bits-versus-bytes boundary observable in Worker logs.
+  console.log("Password verification diagnostics", {
+    "password length": passwordIsString ? password.length : 0,
+    "password UTF-8 byte length": passwordBytes.length,
+    "salt byte length": salt?.length ?? 0,
+    "stored hash byte length": expected?.length ?? 0,
+    "derived hash byte length": derived?.length ?? 0,
+    "iterations": Number.isInteger(rounds) ? rounds : 0,
+    "derived equals stored": verified
+  });
   return verified;
+}
+
+export async function derivePbkdf2Sha256(passwordBytes, saltBytes, iterations) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    passwordBytes,
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt: saltBytes, iterations },
+    key,
+    256
+  );
+  return new Uint8Array(bits);
 }
 
 function validPasswordHashFormat(stored) {
