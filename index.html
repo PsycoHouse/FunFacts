@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Entdecke auf Knopfdruck einen überraschenden Fakt.">
+    <title>Random Fact</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main class="app">
+      <p class="eyebrow">RANDOM FACT</p>
+      <div class="brain" aria-hidden="true">🧠</div>
+
+      <section class="fact-card" aria-live="polite" aria-atomic="true">
+        <span id="category" class="category" hidden></span>
+        <p id="fact" class="fact">Bereit für etwas Neues?</p>
+        <button id="copy-button" class="copy-button" type="button" hidden aria-label="Fact kopieren">Kopieren</button>
+      </section>
+
+      <p id="status" class="status" role="status"></p>
+      <button id="fact-button" class="fact-button" type="button">
+        <span aria-hidden="true">🎲</span> RANDOM FACT
+      </button>
+      <p id="counter" class="counter">0 Facts gesehen</p>
+    </main>
+
+    <footer>
+      <button id="reset-button" class="reset-button" type="button">Verlauf zurücksetzen</button>
+    </footer>
+  </body>
+</html>
