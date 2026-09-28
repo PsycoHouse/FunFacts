@@ -16,6 +16,7 @@ Ein Login in einer statischen GitHub-Pages-Seite **allein schützt keinen API-Ke
 - Ein SQLite Durable Object limitiert atomar auf 20 erfolgreiche Facts je Benutzer/UTC-Tag und zehn fehlgeschlagene Logins je IP/15 Minuten. Schlägt OpenAI fehl, wird die Reservierung zurückgenommen.
 - CORS erlaubt ausschließlich `ALLOWED_ORIGIN`; `/fact` verlangt trotzdem immer ein gültiges Token.
 - Es werden weder Passwörter/Tokens noch OpenAI-Antworten protokolliert.
+- Die optionale Standortfunktion wird erst nach ausdrücklicher Freigabe aktiv. Das Frontend rundet Koordinaten auf drei Nachkommastellen; sie werden nur für die aktuelle Sitzung im Arbeitsspeicher gehalten und beim Fact-Abruf an den Worker sowie zur Faktgenerierung an OpenAI übertragen.
 
 ## Einrichtung – Schritt für Schritt
 
@@ -116,7 +117,7 @@ Mit `APP_USER_ID` und dem bei Schritt 10 verwendeten Passwort anmelden. Falsches
 ## Endpunkte
 
 - `POST /login` mit `{ "username": "…", "password": "…" }`
-- `POST /fact` mit `{}` und `Authorization: Bearer SESSION_TOKEN`
+- `POST /fact` mit `{}` oder optional `{ "location": { "latitude": 52.52, "longitude": 13.405 } }` und `Authorization: Bearer SESSION_TOKEN`
 - `GET /health`
 
 Fehler enthalten nur neutrale Meldungen. Nach dem Tageslimit antwortet der Worker mit HTTP 429 und `{ "error": "Tageslimit erreicht", "remaining": 0 }`.

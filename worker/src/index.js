@@ -55,14 +55,14 @@ async function fact(request, env, headers) {
   if (!payload || payload.user !== env.APP_USER_ID) return json({ error: "Nicht autorisiert" }, 401, headers);
   let body;
   try { body = await request.json(); } catch { return json({ error: "Ungültige Anfrage" }, 400, headers); }
-  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length) return json({ error: "Ungültige Anfrage" }, 400, headers);
+  if (!validFactBody(body)) return json({ error: "Ungültige Anfrage" }, 400, headers);
 
   const day = new Date().toISOString().slice(0, 10);
   const key = `fact:${payload.user}:${day}`;
   const reservation = await limit(env, "increment", key, FACT_LIMIT, 2 * 86400);
   if (!reservation.allowed) return json({ error: "Tageslimit erreicht", remaining: 0 }, 429, headers);
   try {
-    const result = await createFact(env);
+    const result = await createFact(env, body.location);
     return json({ ...result, remaining: FACT_LIMIT - reservation.count }, 200, headers);
   } catch (error) {
     await limit(env, "decrement", key, FACT_LIMIT, 2 * 86400);
@@ -71,17 +71,20 @@ async function fact(request, env, headers) {
   }
 }
 
-async function createFact(env) {
-  const category = CATEGORIES[Math.floor(Math.random() * CATEGORIES.length)];
+async function createFact(env, location) {
+  const category = location ? "Vor Ort" : CATEGORIES[Math.floor(Math.random() * CATEGORIES.length)];
+  const locationPrompt = location
+    ? `Der Fact muss einen konkreten, interessanten Bezug zur Umgebung der Koordinaten ${location.latitude}, ${location.longitude} haben. Nenne nach Möglichkeit den betreffenden Ort oder die Region, aber niemals die Koordinaten.`
+    : "";
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: env.OPENAI_MODEL || "gpt-5-mini",
       instructions: "Antworte ausschließlich mit dem verlangten JSON. Erfinde keine Behauptungen.",
-      input: `Erzeuge einen überraschenden, sachlichen und möglichst korrekten deutschen Fakt der Kategorie ${category}. Maximal zwei kurze Sätze, keine Meinung oder Allgemeinplätze. Die id ist eine beschreibende englische snake_case-ID. category muss exakt ${category} sein.`,
+      input: `Erzeuge einen überraschenden, sachlichen und möglichst korrekten deutschen Fakt der Kategorie ${category}. ${locationPrompt} Maximal zwei kurze Sätze, keine Meinung oder Allgemeinplätze. Die id ist eine beschreibende englische snake_case-ID. category muss exakt ${category} sein.`,
       max_output_tokens: 180,
-      text: { format: { type: "json_schema", name: "random_fact", strict: true, schema: { type: "object", additionalProperties: false, properties: { id: { type: "string", pattern: "^[a-z0-9_]{3,80}$" }, fact: { type: "string", minLength: 10, maxLength: 500 }, category: { type: "string", enum: CATEGORIES } }, required: ["id", "fact", "category"] } } }
+      text: { format: { type: "json_schema", name: "random_fact", strict: true, schema: { type: "object", additionalProperties: false, properties: { id: { type: "string", pattern: "^[a-z0-9_]{3,80}$" }, fact: { type: "string", minLength: 10, maxLength: 500 }, category: { type: "string", enum: [category] } }, required: ["id", "fact", "category"] } } }
     })
   });
   if (!response.ok) throw new Error(`OpenAI status ${response.status}`);
@@ -90,6 +93,17 @@ async function createFact(env) {
   const value = JSON.parse(text || "");
   if (!value || !/^[a-z0-9_]{3,80}$/.test(value.id) || typeof value.fact !== "string" || value.fact.length < 10 || value.fact.length > 500 || value.category !== category) throw new Error("Invalid OpenAI response");
   return value;
+}
+
+function validFactBody(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const keys = Object.keys(body);
+  if (keys.length === 0) return true;
+  if (keys.length !== 1 || keys[0] !== "location") return false;
+  const location = body.location;
+  if (!location || typeof location !== "object" || Array.isArray(location) || Object.keys(location).sort().join(",") !== "latitude,longitude") return false;
+  return Number.isFinite(location.latitude) && location.latitude >= -90 && location.latitude <= 90
+    && Number.isFinite(location.longitude) && location.longitude >= -180 && location.longitude <= 180;
 }
 
 async function signToken(payload, secret) {

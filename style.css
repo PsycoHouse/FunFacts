@@ -130,6 +130,37 @@ input:focus {
 
 .fact.is-new { animation: appear .45s ease both; }
 
+.location-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding: 1rem;
+  border: 1px solid #f2b45b33;
+  border-radius: 1rem;
+  background: #21100b80;
+  text-align: left;
+}
+
+.location-copy { display: flex; align-items: center; gap: .8rem; }
+.location-copy strong, .location-copy span { display: block; }
+.location-copy span:not(.location-icon) { margin-top: .2rem; color: #c69b79; font-size: .78rem; line-height: 1.35; }
+.location-icon { color: #f4b45f; font-size: 1.8rem; }
+.location-button {
+  flex: none;
+  padding: .55rem .8rem;
+  border: 1px solid #d68b4b;
+  border-radius: .7rem;
+  color: #ffdba7;
+  background: #65331f;
+  cursor: pointer;
+  font-weight: 700;
+}
+.location-button[aria-pressed="true"] { color: #231007; background: #f4b45f; }
+.location-button:disabled { cursor: wait; opacity: .65; }
+.privacy-note { margin: .55rem .5rem 0; color: #9f7c65; font-size: .7rem; line-height: 1.4; }
+
 .text-button {
   padding: .35rem;
   border: 0;
@@ -155,6 +186,8 @@ button:focus-visible { outline: 3px solid #ffd27d; outline-offset: 3px; }
   .shell { width: min(100% - 1rem, 720px); padding: 1rem 0; }
   .panel { padding: 1.25rem; padding-top: 3.5rem; }
   .login-panel { padding-top: 1.5rem; }
+  .location-card { align-items: stretch; flex-direction: column; }
+  .location-button { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
