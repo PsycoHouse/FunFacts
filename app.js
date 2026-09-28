@@ -1,128 +1,125 @@
-const API_URL = "https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev";
-const STORAGE_KEY = "random-fact-seen-ids-v1";
+// Öffentliche Worker-URL (kein Secret). Vor dem Deployment einmal anpassen.
+const API_URL = "https://random-fact-api.YOUR-SUBDOMAIN.workers.dev";
+const SESSION_KEY = "random-fact-session-v1";
+const HISTORY_KEY = "random-fact-seen-ids-v1";
 const MAX_DUPLICATE_RETRIES = 3;
 
-const factElement = document.querySelector("#fact");
-const categoryElement = document.querySelector("#category");
-const factButton = document.querySelector("#fact-button");
-const copyButton = document.querySelector("#copy-button");
-const resetButton = document.querySelector("#reset-button");
-const counterElement = document.querySelector("#counter");
-const statusElement = document.querySelector("#status");
-
+const $ = (selector) => document.querySelector(selector);
+const loginView = $("#login-view");
+const appView = $("#app-view");
+const loginForm = $("#login-form");
+const loginButton = $("#login-button");
+const loginStatus = $("#login-status");
+const factButton = $("#fact-button");
+const statusElement = $("#status");
+const factElement = $("#fact");
+const categoryElement = $("#category");
+const copyButton = $("#copy-button");
+let token = sessionStorage.getItem(SESSION_KEY) || "";
 let seenIds = loadSeenIds();
 let currentFact = "";
-let isLoading = false;
+let loading = false;
 
-updateCounter();
+showAuthenticated(Boolean(token));
+updateHistoryCounter();
 
 function loadSeenIds() {
   try {
-    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    const value = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
     return new Set(Array.isArray(value) ? value.filter((id) => typeof id === "string") : []);
-  } catch {
-    return new Set();
-  }
+  } catch { return new Set(); }
 }
 
-function saveSeenIds() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify([...seenIds]));
+function showAuthenticated(authenticated) {
+  loginView.hidden = authenticated;
+  appView.hidden = !authenticated;
+  if (!authenticated) $("#username").focus();
 }
 
-function updateCounter() {
-  counterElement.textContent = `${seenIds.size} ${seenIds.size === 1 ? "Fact" : "Facts"} gesehen`;
-}
+function configured() { return !API_URL.includes("YOUR-SUBDOMAIN"); }
 
-function setLoading(loading) {
-  isLoading = loading;
-  factButton.disabled = loading;
-  factButton.innerHTML = loading
-    ? '<span aria-hidden="true">⏳</span> WIRD GELADEN …'
-    : '<span aria-hidden="true">🎲</span> RANDOM FACT';
-}
-
-function isValidFact(value) {
-  return value && typeof value.id === "string" && /^[a-z0-9_]{3,80}$/.test(value.id)
-    && typeof value.fact === "string" && value.fact.trim().length >= 10 && value.fact.length <= 500
-    && typeof value.category === "string" && value.category.length <= 40;
-}
-
-async function requestFact() {
-  const response = await fetch(API_URL, {
+async function api(path, options = {}) {
+  const response = await fetch(`${API_URL}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}"
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(options.body || {})
   });
-
-  const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(data?.error || `Anfrage fehlgeschlagen (${response.status}).`);
-  if (!isValidFact(data)) throw new Error("Die API hat eine ungültige Antwort geliefert.");
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.error || `Anfrage fehlgeschlagen (${response.status}).`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
   return data;
 }
 
-async function showRandomFact() {
-  if (isLoading) return;
-  if (API_URL.includes("YOUR-WORKER")) {
-    statusElement.textContent = "Bitte zuerst die Worker-URL in app.js eintragen.";
-    return;
-  }
-
-  setLoading(true);
-  statusElement.textContent = "";
-
+loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!configured()) { loginStatus.textContent = "Bitte zuerst die Worker-URL in app.js eintragen."; return; }
+  loginButton.disabled = true;
+  loginButton.textContent = "WIRD ANGEMELDET …";
+  loginStatus.textContent = "";
   try {
-    for (let attempt = 0; attempt <= MAX_DUPLICATE_RETRIES; attempt += 1) {
-      const result = await requestFact();
-      if (seenIds.has(result.id)) {
-        if (attempt === MAX_DUPLICATE_RETRIES) {
-          throw new Error("Diesmal gab es nur bekannte Facts. Versuch es bitte erneut.");
-        }
-        continue;
-      }
+    const data = await api("/login", { body: { username: $("#username").value, password: $("#password").value } });
+    token = data.token;
+    sessionStorage.setItem(SESSION_KEY, token);
+    loginForm.reset();
+    showAuthenticated(true);
+  } catch (error) { loginStatus.textContent = error.message; }
+  finally { loginButton.disabled = false; loginButton.textContent = "ANMELDEN"; }
+});
 
-      seenIds.add(result.id);
-      saveSeenIds();
-      updateCounter();
-      currentFact = result.fact.trim();
-      categoryElement.textContent = result.category;
-      categoryElement.hidden = false;
-      copyButton.hidden = false;
-      factElement.classList.remove("is-new");
-      void factElement.offsetWidth;
-      factElement.textContent = currentFact;
-      factElement.classList.add("is-new");
-      return;
-    }
-  } catch (error) {
-    statusElement.textContent = error instanceof Error ? error.message : "Etwas ist schiefgelaufen.";
-  } finally {
-    setLoading(false);
-  }
+function setLoading(value) {
+  loading = value;
+  factButton.disabled = value;
+  factButton.textContent = value ? "WIRD GELADEN …" : "NÄCHSTER FACT";
 }
 
-factButton.addEventListener("click", showRandomFact);
-
-document.addEventListener("keydown", (event) => {
-  if ((event.key === "Enter" || event.key === " ") && event.target === document.body) {
-    event.preventDefault();
-    showRandomFact();
-  }
-});
-
-copyButton.addEventListener("click", async () => {
+async function nextFact() {
+  if (loading) return;
+  setLoading(true); statusElement.textContent = "";
   try {
-    await navigator.clipboard.writeText(currentFact);
-    copyButton.textContent = "Kopiert!";
-    setTimeout(() => { copyButton.textContent = "Kopieren"; }, 1400);
-  } catch {
-    statusElement.textContent = "Der Fact konnte nicht kopiert werden.";
-  }
-});
+    for (let attempt = 0; attempt <= MAX_DUPLICATE_RETRIES; attempt += 1) {
+      const data = await api("/fact");
+      updateDailyCounter(data.remaining);
+      if (seenIds.has(data.id)) {
+        if (attempt === MAX_DUPLICATE_RETRIES) throw new Error("Es wurden nur bekannte Facts gefunden. Versuche es später erneut.");
+        continue;
+      }
+      seenIds.add(data.id);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify([...seenIds]));
+      updateHistoryCounter();
+      currentFact = data.fact.trim();
+      categoryElement.textContent = data.category;
+      categoryElement.hidden = false;
+      copyButton.hidden = false;
+      factElement.classList.remove("is-new"); void factElement.offsetWidth;
+      factElement.textContent = currentFact;
+      factElement.classList.add("is-new");
+      break;
+    }
+  } catch (error) {
+    if (error.status === 401) logout("Deine Sitzung ist abgelaufen. Bitte melde dich erneut an.");
+    else { statusElement.textContent = error.message; if (error.status === 429) updateDailyCounter(0); }
+  } finally { setLoading(false); }
+}
 
-resetButton.addEventListener("click", () => {
+function updateDailyCounter(remaining) { if (Number.isInteger(remaining)) $("#daily-counter").textContent = `${20 - remaining} / 20 heute genutzt`; }
+function updateHistoryCounter() { $("#counter").textContent = `${seenIds.size} Facts insgesamt gesehen`; }
+function logout(message = "") { token = ""; sessionStorage.removeItem(SESSION_KEY); showAuthenticated(false); loginStatus.textContent = message; }
+
+factButton.addEventListener("click", nextFact);
+$("#logout-button").addEventListener("click", () => logout());
+document.addEventListener("keydown", (event) => {
+  if (!appView.hidden && (event.key === "Enter" || event.key === " ") && !["INPUT", "BUTTON", "TEXTAREA"].includes(document.activeElement.tagName)) { event.preventDefault(); nextFact(); }
+});
+copyButton.addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(currentFact); copyButton.textContent = "Kopiert!"; setTimeout(() => { copyButton.textContent = "Fact kopieren"; }, 1300); }
+  catch { statusElement.textContent = "Der Fact konnte nicht kopiert werden."; }
+});
+$("#reset-button").addEventListener("click", () => {
   if (!confirm("Möchtest du den Verlauf wirklich zurücksetzen?")) return;
-  seenIds = new Set();
-  localStorage.removeItem(STORAGE_KEY);
-  updateCounter();
+  seenIds = new Set(); localStorage.removeItem(HISTORY_KEY); updateHistoryCounter();
   statusElement.textContent = "Verlauf wurde zurückgesetzt.";
 });
