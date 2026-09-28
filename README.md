@@ -30,9 +30,12 @@ Alle Dateien inklusive der versteckten Ordner `.github` hochladen (**Add file �
 
 ```text
 index.html  style.css  app.js
+assets/herbstblatt.png
 worker/src/index.js  worker/wrangler.toml
 .github/workflows/deploy.yml
 ```
+
+Das Herbstblatt für die dekorativen Ecken der Login- und Fact-Box als **`assets/herbstblatt.png`** ablegen (Dateiname inklusive Groß-/Kleinschreibung exakt beibehalten). Am besten eignet sich ein freigestelltes PNG mit transparentem Hintergrund und ungefähr quadratischer Arbeitsfläche. Nach dem Hochladen genügt ein normaler Commit; der Pages-Workflow übernimmt den gesamten `assets`-Ordner automatisch. Fehlt die Datei noch, bleiben die Boxen ohne defektes Bildsymbol nutzbar.
 
 ### 3. GitHub Pages aktivieren
 
@@ -85,7 +88,7 @@ Die komplette Ausgabe als `APP_AUTH_SECRET` speichern. Nicht wiederverwenden ode
 
 ### 10. GitHub Action starten
 
-Nach einem Push auf `main` startet `.github/workflows/deploy.yml`. Alternativ **Actions → Deploy GitHub Pages and Worker → Run workflow**. Der Job setzt Worker-Secrets, deployed Worker samt Durable Object und veröffentlicht ausschließlich `index.html`, `style.css`, `app.js` auf Pages.
+Nach einem Push auf `main` startet `.github/workflows/deploy.yml`. Alternativ **Actions → Deploy GitHub Pages and Worker → Run workflow**. Der Job setzt Worker-Secrets, deployed Worker samt Durable Object und veröffentlicht `index.html`, `style.css`, `app.js` sowie den `assets`-Ordner auf Pages.
 
 ### 11. Deployment prüfen
 

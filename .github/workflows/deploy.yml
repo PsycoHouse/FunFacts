@@ -90,6 +90,7 @@ jobs:
         run: |
           mkdir public
           cp index.html style.css app.js public/
+          cp -r assets public/
       - uses: actions/upload-pages-artifact@v4
         with:
           path: public

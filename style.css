@@ -4,6 +4,7 @@
   color: #fff8e8;
   background: #1b0d08;
   font-synthesis: none;
+  --autumn-leaf: url("assets/herbstblatt.png");
 }
 
 * { box-sizing: border-box; }
@@ -39,13 +40,45 @@ button, input { font: inherit; }
 
 .panel {
   position: relative;
+  isolation: isolate;
+  overflow: hidden;
   padding: clamp(1.5rem, 5vw, 3rem);
   border: 1px solid #f2b45b33;
   border-radius: 1.5rem;
-  background: linear-gradient(155deg, #472316e8, #29130dea);
+  background:
+    radial-gradient(circle at 8% 4%, #f4b45f1f, transparent 15rem),
+    linear-gradient(155deg, #472316f2, #29130df2);
   box-shadow: 0 24px 80px #100500aa, inset 0 1px #fff3d919;
   animation: appear .35s ease both;
 }
+
+.panel::before,
+.panel::after {
+  position: absolute;
+  z-index: -1;
+  width: clamp(8rem, 28vw, 13rem);
+  aspect-ratio: 1;
+  background: var(--autumn-leaf) center / contain no-repeat;
+  content: "";
+  opacity: .34;
+  pointer-events: none;
+  filter: drop-shadow(0 12px 18px #10050080) saturate(1.12);
+}
+
+.panel::before {
+  top: -3.75rem;
+  left: -3.25rem;
+  transform: rotate(-24deg);
+}
+
+.panel::after {
+  right: -4rem;
+  bottom: -4.25rem;
+  transform: rotate(154deg) scale(.88);
+  opacity: .24;
+}
+
+.panel > * { position: relative; z-index: 1; }
 
 .login-panel { max-width: 430px; margin: auto; }
 h1 { margin: 0; color: #fff2d0; font-size: 2rem; }
