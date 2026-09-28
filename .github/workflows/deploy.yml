@@ -1,0 +1,63 @@
+name: Deploy GitHub Pages and Worker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy-worker:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: ${{ secrets.CLOUDFLARE_WORKER_NAME || 'random-fact-api' }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      APP_USER_ID: ${{ secrets.APP_USER_ID }}
+      APP_PASSWORD_HASH: ${{ secrets.APP_PASSWORD_HASH }}
+      APP_AUTH_SECRET: ${{ secrets.APP_AUTH_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Worker und Durable Object bereitstellen
+        working-directory: worker
+        run: npx --yes wrangler@4 deploy --name "$WORKER_NAME" --var "ALLOWED_ORIGIN:https://${{ github.repository_owner }}.github.io"
+      - name: Worker-Secrets sicher übertragen
+        working-directory: worker
+        shell: bash
+        run: |
+          set +x
+          printf '%s' "$OPENAI_API_KEY" | npx --yes wrangler@4 secret put OPENAI_API_KEY --name "$WORKER_NAME"
+          printf '%s' "$APP_USER_ID" | npx --yes wrangler@4 secret put APP_USER_ID --name "$WORKER_NAME"
+          printf '%s' "$APP_PASSWORD_HASH" | npx --yes wrangler@4 secret put APP_PASSWORD_HASH --name "$WORKER_NAME"
+          printf '%s' "$APP_AUTH_SECRET" | npx --yes wrangler@4 secret put APP_AUTH_SECRET --name "$WORKER_NAME"
+
+  deploy-pages:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Öffentliches Frontend zusammenstellen
+        run: |
+          mkdir public
+          cp index.html style.css app.js public/
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+      - name: GitHub Pages deployen
+        id: deployment
+        uses: actions/deploy-pages@v4

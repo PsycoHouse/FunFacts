@@ -1,119 +1,132 @@
-# Random Fact
+# Private Random Fact
 
-Eine kleine, responsive Dark-Mode-Web-App, die über einen Cloudflare Worker jeweils einen deutschen Random Fact erzeugt. Das statische Frontend liegt kostenlos auf GitHub Pages; der OpenAI-Schlüssel bleibt ausschließlich als Worker-Secret auf dem Server.
+Eine installierungsfreie Dark-Mode-Web-App mit serverseitigem Login. Das statische Frontend läuft auf GitHub Pages; Authentifizierung, Limits und der einzige OpenAI-Aufruf laufen in einem Cloudflare Worker.
 
-## Nutzung
-
-Für Endnutzer ist **keine Installation und kein Konto erforderlich**. Sie öffnen ausschließlich die veröffentlichte GitHub-Pages-URL im Browser, zum Beispiel:
+## Architektur und Sicherheitsprinzip
 
 ```text
-https://DEIN-NAME.github.io/random-fact/
+Browser → GitHub Pages → Cloudflare Worker → OpenAI Responses API
 ```
 
-Node.js, npm und Wrangler werden zum Benutzen der App nicht benötigt. Die folgenden Schritte richten sich nur an die Person, die eine eigene Instanz der App veröffentlicht.
+Ein Login in einer statischen GitHub-Pages-Seite **allein schützt keinen API-Key**: Alles, was an den Browser ausgeliefert wird, ist einsehbar. Die Sicherheit entsteht hier dadurch, dass `OPENAI_API_KEY`, Passwort-Hash und Signierschlüssel ausschließlich verschlüsselte Worker-Secrets sind. Das Frontend kennt nur die öffentliche Worker-URL. Es ruft niemals OpenAI direkt auf.
 
-## Architektur
+- Der Worker prüft Benutzername und PBKDF2-SHA-256-Hash serverseitig.
+- Ein HMAC-SHA-256-signiertes Token gilt 24 Stunden und liegt nur in `sessionStorage`.
+- Nur Fact-IDs liegen als unkritische Historie in `localStorage`.
+- Ein SQLite Durable Object limitiert atomar auf 20 erfolgreiche Facts je Benutzer/UTC-Tag und zehn fehlgeschlagene Logins je IP/15 Minuten. Schlägt OpenAI fehl, wird die Reservierung zurückgenommen.
+- CORS erlaubt ausschließlich `ALLOWED_ORIGIN`; `/fact` verlangt trotzdem immer ein gültiges Token.
+- Es werden weder Passwörter/Tokens noch OpenAI-Antworten protokolliert.
 
-- `index.html`, `style.css`, `app.js`: statisches GitHub-Pages-Frontend ohne Build-Schritt
-- `worker/worker.js`: Cloudflare Worker als abgesicherter API-Proxy zur OpenAI Responses API
-- Der Browser speichert nur kompakte Fact-IDs unter `random-fact-seen-ids-v1` in `localStorage`.
-- Bei einer bereits bekannten ID fordert die App automatisch erneut an (maximal drei Wiederholungsversuche).
+## Einrichtung – Schritt für Schritt
 
-## Veröffentlichung ohne lokale Installation (empfohlen)
+### 1. GitHub Repository erstellen
 
-Die komplette Einrichtung ist über die Weboberflächen von GitHub und Cloudflare möglich. Auf dem eigenen Rechner muss dafür keine Entwicklungssoftware installiert werden.
+Auf GitHub **New repository** wählen, zum Beispiel `random-fact` nennen und als Standard-Branch `main` verwenden. Keine geheimen Werte in Dateien eintragen.
 
-### 1. Repository auf GitHub anlegen
+### 2. Projekt hochladen
 
-1. Auf GitHub **New repository** wählen, das Repository zum Beispiel `random-fact` nennen und erstellen.
-2. Über **Add file → Upload files** alle Dateien und Ordner dieses Projekts hochladen und die Änderung in den Standard-Branch (`main`) übernehmen.
-3. Niemals einen API-Key in eine Datei schreiben oder committen.
-
-### 2. GitHub Pages aktivieren
-
-1. Im Repository **Settings → Pages** öffnen.
-2. Unter **Build and deployment** als Quelle **Deploy from a branch** wählen.
-3. Branch **main** und Verzeichnis **/(root)** wählen und speichern.
-4. Nach Abschluss des Deployments zeigt GitHub die öffentliche URL an, typischerweise `https://DEIN-NAME.github.io/random-fact/`.
-
-Die Origin dieser Adresse lautet nur `https://DEIN-NAME.github.io` — ohne Repository-Pfad und ohne abschließenden Slash. Diese Origin wird im nächsten Schritt für CORS benötigt.
-
-### 3. Worker direkt im Cloudflare-Dashboard erstellen
-
-Voraussetzungen für die veröffentlichende Person sind lediglich ein Cloudflare-Konto und ein OpenAI-API-Key.
-
-1. Im Cloudflare-Dashboard **Workers & Pages** öffnen und **Create** wählen.
-2. Einen Worker erstellen, ihm zum Beispiel den Namen `random-fact-api` geben und zunächst deployen.
-3. **Edit code** öffnen, den vorhandenen Beispielcode vollständig durch den Inhalt von [`worker/worker.js`](worker/worker.js) ersetzen und erneut **Deploy** wählen.
-4. In den Worker-Einstellungen **Settings → Variables and Secrets** öffnen.
-5. `ALLOWED_ORIGIN` als normale Textvariable mit der zuvor ermittelten GitHub-Pages-Origin anlegen, zum Beispiel `https://DEIN-NAME.github.io`.
-6. `OPENAI_API_KEY` als **Secret** anlegen und den OpenAI-API-Key als Wert eintragen.
-7. Optional `OPENAI_MODEL` als Textvariable anlegen, wenn statt des Standardmodells `gpt-5-mini` ein anderes Modell verwendet werden soll.
-
-Die Bezeichnungen einzelner Schaltflächen können sich im Cloudflare-Dashboard leicht ändern. Entscheidend ist, dass der Code aus `worker/worker.js` deployed wird, `ALLOWED_ORIGIN` eine Textvariable und `OPENAI_API_KEY` ein verschlüsseltes Secret ist. Kein `*` als Origin verwenden, wenn der Browserzugriff auf die eigene Seite beschränkt bleiben soll. Bei einer eigenen Domain deren Origin eintragen, beispielsweise `https://facts.example.com`.
-
-Cloudflare zeigt die öffentliche Worker-URL an, etwa:
+Alle Dateien inklusive der versteckten Ordner `.github` hochladen (**Add file → Upload files**) und nach `main` committen. Alternativ Git verwenden. Die gewünschte Struktur ist:
 
 ```text
-https://random-fact-api.DEINE-SUBDOMAIN.workers.dev
+index.html  style.css  app.js
+worker/src/index.js  worker/wrangler.toml
+.github/workflows/deploy.yml
 ```
 
-### 4. Worker-URL über GitHub eintragen
+### 3. GitHub Pages aktivieren
 
-1. Im GitHub-Repository `app.js` öffnen und auf **Edit this file** (Stiftsymbol) klicken.
-2. Ausschließlich den Platzhalter am Anfang der Datei ersetzen:
+**Repository → Settings → Pages → Build and deployment → Source: GitHub Actions** wählen. Nicht „Deploy from a branch“ verwenden, weil der Workflow das Pages-Artefakt veröffentlicht.
 
-   ```js
-   const API_URL = "https://random-fact-api.DEINE-SUBDOMAIN.workers.dev";
-   ```
+### 4. Cloudflare Konto erstellen
 
-3. Die Änderung über **Commit changes** in `main` speichern.
-4. Warten, bis GitHub Pages die Änderung veröffentlicht hat.
+Auf Cloudflare registrieren, E-Mail bestätigen und im Dashboard **Workers & Pages** einmal öffnen. Für Freunde ist kein Cloudflare-Konto nötig.
 
-**Hier niemals den OpenAI-API-Key eintragen.** Die Worker-URL ist öffentlich und kein Secret.
+### 5. Worker erstellen
 
-### 5. Veröffentlichung testen und URL weitergeben
+Der Workflow erstellt/deployt `random-fact-api` automatisch. Ein manuell angelegter Worker ist nicht nötig. Soll der Name anders sein, das optionale Repository-Secret `CLOUDFLARE_WORKER_NAME` anlegen. Nach dem ersten Deploy zeigt Cloudflare unter **Workers & Pages → Worker** die `workers.dev`-URL. In `app.js` bei `API_URL` einmalig `https://random-fact-api.YOUR-SUBDOMAIN.workers.dev` durch genau diese URL (ohne abschließenden Slash) ersetzen und committen.
 
-Die GitHub-Pages-URL öffnen und **Random Fact** anklicken. Prüfen:
+### 6. Cloudflare API Token erstellen
 
-- Fact und Kategorie erscheinen.
-- Der lokale Counter steigt.
-- Nach Neuladen bleibt der Counter erhalten.
-- **Verlauf zurücksetzen** fragt vor dem Löschen nach.
-- Im Browser-Netzwerk-Tab wird nur die Worker-URL aufgerufen; der API-Key ist nirgends sichtbar.
+Cloudflare: **My Profile → API Tokens → Create Token → Edit Cloudflare Workers**. Der Token benötigt für das eigene Konto Worker-Script-Schreibrechte und Durable-Objects-Schreibrechte. Konto-ID im Dashboard kopieren. Beide Werte werden gleich als GitHub-Secrets gespeichert.
 
-An Endnutzer wird danach **nur die GitHub-Pages-URL** weitergegeben. Sie müssen weder Dateien herunterladen noch Node.js, npm oder Wrangler installieren und benötigen auch keinen Cloudflare- oder OpenAI-Zugang.
+### 7. OpenAI API Key erstellen
 
-## Optional: Deployment für Entwickler mit Wrangler
+Im OpenAI-Platform-Konto einen API-Key erstellen, Abrechnung/Limits konfigurieren und den Wert sofort sicher kopieren. Er gehört ausschließlich in das Repository-Secret `OPENAI_API_KEY`, ausdrücklich **nicht** in eine GitHub Variable, `app.js`, `wrangler.toml` oder einen Commit.
 
-Wer den Worker lieber über eine lokale Entwicklungsumgebung verwaltet, kann optional Node.js/npm und Wrangler verwenden. Diese Methode ist weder für Endnutzer noch für das empfohlene Dashboard-Deployment erforderlich.
+### 8. GitHub Secrets eintragen
+
+Für **jeden** Wert: **GitHub → Repository → Settings → Secrets and variables → Actions → Repository secrets → New repository secret**. Folgende Repository-Secrets anlegen:
+
+| Name | Inhalt |
+|---|---|
+| `OPENAI_API_KEY` | OpenAI API-Key |
+| `APP_USER_ID` | erlaubter Benutzername |
+| `APP_PASSWORD_HASH` | Ergebnis aus Schritt 10, nie das Klartextpasswort |
+| `APP_AUTH_SECRET` | Ergebnis aus Schritt 9 |
+| `CLOUDFLARE_API_TOKEN` | Token aus Schritt 6 |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare-Konto-ID |
+| `CLOUDFLARE_WORKER_NAME` | optional; sonst `random-fact-api` |
+
+Secrets niemals zusätzlich unter **Variables** anlegen. Der Workflow leitet die vier App-Secrets per Standardeingabe an `wrangler secret put`; sie werden weder in Argumenten noch per `echo` ausgegeben. `ALLOWED_ORIGIN` wird nicht geheim gespeichert, sondern beim Deploy automatisch zu `https://GITHUB-BENUTZER.github.io` gesetzt.
+
+### 9. APP_AUTH_SECRET erzeugen
+
+Lokal in einem Terminal erzeugen (OpenSSL ist auf macOS/Linux und in Git Bash üblich):
 
 ```bash
-npm install --global wrangler
-wrangler login
-cd worker
-cp wrangler.toml.example wrangler.toml
+openssl rand -base64 48
 ```
 
-In `worker/wrangler.toml` `ALLOWED_ORIGIN` auf die konkrete GitHub-Pages-Origin setzen, anschließend das Secret hinterlegen und deployen:
+Die komplette Ausgabe als `APP_AUTH_SECRET` speichern. Nicht wiederverwenden oder committen. Ein Wechsel meldet alle bestehenden Sitzungen ab.
+
+### 10. Passwort-Hash erzeugen
+
+Node.js 20+ lokal verwenden. Dieser Befehl fragt verdeckt nach dem Passwort, erzeugt ein zufälliges 16-Byte-Salt und 310.000 PBKDF2-SHA-256-Runden. Das Passwort wird nicht in die Shell-History geschrieben:
 
 ```bash
-wrangler secret put OPENAI_API_KEY
-wrangler deploy
+read -s -p "Passwort: " PASSWORD; echo
+printf '%s' "$PASSWORD" | node -e 'const c=require("crypto"),fs=require("fs");const p=fs.readFileSync(0),s=c.randomBytes(16),i=310000,h=c.pbkdf2Sync(p,s,i,32,"sha256"),b=x=>x.toString("base64url");console.log(`pbkdf2_sha256$${i}$${b(s)}$${b(h)}`)'
+unset PASSWORD
 ```
 
-Nach Änderungen an Worker-Code oder -Konfiguration erneut `wrangler deploy` ausführen. Für einen optionalen lokalen Frontend-Test `ALLOWED_ORIGIN` vorübergehend auf `http://localhost:8000` setzen, den Worker erneut deployen und einen lokalen Webserver starten:
+Nur die Ausgabe `pbkdf2_sha256$...` als `APP_PASSWORD_HASH` speichern. Salt und Rundenzahl dürfen Teil des Hashformats sein; das Klartextpasswort darf nirgends gespeichert werden.
+
+### 11. GitHub Action starten
+
+Nach einem Push auf `main` startet `.github/workflows/deploy.yml`. Alternativ **Actions → Deploy GitHub Pages and Worker → Run workflow**. Der Job setzt Worker-Secrets, deployed Worker samt Durable Object und veröffentlicht ausschließlich `index.html`, `style.css`, `app.js` auf Pages.
+
+### 12. Deployment prüfen
+
+Beide Jobs müssen grün sein. Cloudflare **Workers & Pages → random-fact-api → Settings → Variables and Secrets** muss vier verschlüsselte Secrets sowie `ALLOWED_ORIGIN` zeigen. `GET /health` funktioniert nur mit der erlaubten Browser-Origin; `/fact` liefert ohne gültiges Bearer-Token `401`.
+
+### 13. GitHub-Pages-Link öffnen
+
+Die veröffentlichte Adresse steht unter **Settings → Pages**, typischerweise:
+
+```text
+https://MEINNAME.github.io/random-fact/
+```
+
+Diese URL an Freunde schicken – niemals die OpenAI-Zugangsdaten. Endnutzer installieren nichts.
+
+### 14. Login testen
+
+Mit `APP_USER_ID` und dem bei Schritt 10 verwendeten Passwort anmelden. Falsches Passwort muss abgewiesen werden. Nach Login einen Fact laden, kopieren, Verlauf zurücksetzen und abmelden. In DevTools darf unter Storage nur das Sitzungstoken in `sessionStorage` und die ID-Liste in `localStorage` erscheinen; kein API-Key oder Passwort. Im Netzwerk erscheinen nur Requests zum Worker, nie zu `api.openai.com`.
+
+## Endpunkte
+
+- `POST /login` mit `{ "username": "…", "password": "…" }`
+- `POST /fact` mit `{}` und `Authorization: Bearer SESSION_TOKEN`
+- `GET /health`
+
+Fehler enthalten nur neutrale Meldungen. Nach dem Tageslimit antwortet der Worker mit HTTP 429 und `{ "error": "Tageslimit erreicht", "remaining": 0 }`.
+
+## Lokale Prüfungen
 
 ```bash
-python3 -m http.server 8000
+npm test
+node --check app.js
+node --check worker/src/index.js
 ```
 
-Dann `http://localhost:8000` öffnen. Die HTML-Datei nicht direkt über `file://` starten, weil dabei keine normale HTTP-Origin übertragen wird.
-
-## Sicherheit und Datenschutz
-
-- Der API-Key ist ausschließlich ein Cloudflare-Secret und wird nie an den Browser gesendet.
-- Der Worker akzeptiert nur `POST`/`OPTIONS`, prüft Origin, Content-Type, Größe und Body und validiert die strukturierte KI-Antwort erneut.
-- Die OpenAI-Ausgabe ist per JSON Schema eingeschränkt und bewusst kurz gehalten.
-- Es werden keine Namen, Prompts oder sonstigen Nutzerdaten gespeichert. Lokal bleiben lediglich bereits gesehene Fact-IDs.
-- CORS ist keine Benutzer-Authentifizierung und verhindert keinen direkten serverseitigen Missbrauch der öffentlichen Worker-URL. Für eine öffentliche App mit relevantem Traffic empfiehlt sich zusätzlich Cloudflare Rate Limiting beziehungsweise eine WAF-Regel.
+Die automatisierten Tests verwenden ausschließlich Mocks und keinen echten OpenAI-Key. `.gitignore` schließt lokale `.env`-/`.dev.vars`-Dateien und Wrangler-Zustand aus.
