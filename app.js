@@ -19,7 +19,9 @@ let token = sessionStorage.getItem(SESSION_KEY) || "";
 let seenIds = loadSeenIds();
 let currentFact = "";
 let loading = false;
-let location = null;
+// `window.location` is already provided by browsers. A top-level binding with the
+// same name can prevent this entire classic script from being parsed.
+let userLocation = null;
 
 showAuthenticated(Boolean(token));
 updateHistoryCounter();
@@ -82,7 +84,7 @@ async function nextFact() {
   setLoading(true); statusElement.textContent = "";
   try {
     for (let attempt = 0; attempt <= MAX_DUPLICATE_RETRIES; attempt += 1) {
-      const data = await api("/fact", { body: location ? { location } : {} });
+      const data = await api("/fact", { body: userLocation ? { location: userLocation } : {} });
       updateDailyCounter(data.remaining);
       if (seenIds.has(data.id)) {
         if (attempt === MAX_DUPLICATE_RETRIES) throw new Error("Es wurden nur bekannte Facts gefunden. Versuche es später erneut.");
@@ -107,7 +109,7 @@ async function nextFact() {
 }
 
 function updateLocationControl() {
-  const enabled = Boolean(location);
+  const enabled = Boolean(userLocation);
   const button = $("#location-button");
   button.setAttribute("aria-pressed", String(enabled));
   button.textContent = enabled ? "Deaktivieren" : "Aktivieren";
@@ -125,12 +127,12 @@ function enableLocation() {
   statusElement.textContent = "";
   navigator.geolocation.getCurrentPosition(({ coords }) => {
     // Auf drei Nachkommastellen begrenzen, damit kein unnötig genauer Standort übertragen wird.
-    location = { latitude: Number(coords.latitude.toFixed(3)), longitude: Number(coords.longitude.toFixed(3)) };
+    userLocation = { latitude: Number(coords.latitude.toFixed(3)), longitude: Number(coords.longitude.toFixed(3)) };
     updateLocationControl();
     button.disabled = false;
     statusElement.textContent = "Standort aktiviert. Dein nächster Fact kommt aus deiner Nähe.";
   }, (error) => {
-    location = null;
+    userLocation = null;
     updateLocationControl();
     button.disabled = false;
     statusElement.textContent = error.code === error.PERMISSION_DENIED
@@ -143,7 +145,7 @@ function updateDailyCounter(remaining) { if (Number.isInteger(remaining)) $("#da
 function updateHistoryCounter() { $("#counter").textContent = `${seenIds.size} Facts insgesamt gesehen`; }
 function logout(message = "") {
   token = "";
-  location = null;
+  userLocation = null;
   sessionStorage.removeItem(SESSION_KEY);
   updateLocationControl();
   showAuthenticated(false);
@@ -152,8 +154,8 @@ function logout(message = "") {
 
 factButton.addEventListener("click", nextFact);
 $("#location-button").addEventListener("click", () => {
-  if (location) {
-    location = null;
+  if (userLocation) {
+    userLocation = null;
     updateLocationControl();
     statusElement.textContent = "Standort deaktiviert.";
   } else enableLocation();
