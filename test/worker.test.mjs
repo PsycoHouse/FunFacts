@@ -35,6 +35,16 @@ function request(path, body = {}, token = "") {
   return new Request(`https://worker.test${path}`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
 }
 
+test("CORS accepts GitHub origins regardless of hostname casing", async () => {
+  const response = await worker.fetch(new Request("https://worker.test/login", {
+    method: "OPTIONS",
+    headers: { Origin: origin, "Access-Control-Request-Method": "POST" }
+  }), { ALLOWED_ORIGIN: "https://Example.github.io" });
+
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get("Access-Control-Allow-Origin"), origin);
+});
+
 test("authentication, token validation, daily limit and protected OpenAI call", async () => {
   const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: await passwordHash("correct horse"), APP_AUTH_SECRET: "a-long-test-secret", OPENAI_API_KEY: "server-only", RATE_LIMITER: limiterNamespace() };
   assert.equal((await worker.fetch(request("/fact"), env)).status, 401);

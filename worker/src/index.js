@@ -146,7 +146,14 @@ async function constantTimeEqual(a, b) {
 function constantTimeBytes(a, b) { let diff = a.length ^ b.length; const length = Math.max(a.length, b.length); for (let i = 0; i < length; i += 1) diff |= (a[i] || 0) ^ (b[i] || 0); return diff === 0; }
 function base64url(bytes) { let value = ""; for (const byte of bytes) value += String.fromCharCode(byte); return btoa(value).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_"); }
 function fromBase64url(value) { const normalized = value.replace(/-/g, "+").replace(/_/g, "/"); const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")); return Uint8Array.from(binary, (char) => char.charCodeAt(0)); }
-function originAllowed(origin, allowed) { return Boolean(origin && allowed && origin === allowed); }
+function originAllowed(origin, allowed) {
+  if (!origin || !allowed) return false;
+  try {
+    // URL normalizes host names to lower case. This matters when the GitHub owner
+    // contains capital letters but browsers serialize the Origin in lower case.
+    return new URL(origin).origin === new URL(allowed).origin;
+  } catch { return false; }
+}
 function corsHeaders(origin, allowed) { const headers = { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type", "Cache-Control": "no-store", Vary: "Origin" }; if (originAllowed(origin, allowed)) headers["Access-Control-Allow-Origin"] = origin; return headers; }
 function json(value, status, headers) { return new Response(JSON.stringify(value), { status, headers }); }
 async function limit(env, action, key, max, ttl) { const id = env.RATE_LIMITER.idFromName("global"); return (await env.RATE_LIMITER.get(id).fetch("https://limiter.internal/", { method: "POST", body: JSON.stringify({ action, key, max, ttl }) })).json(); }
