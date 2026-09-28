@@ -152,7 +152,11 @@ async function verifyPassword(password, stored) {
   const [algorithm, roundsText, saltText, hashText] = parts;
   const rounds = Number(roundsText);
   const algorithmRecognized = algorithm === "pbkdf2_sha256";
-  const iterationsValid = Number.isInteger(rounds) && rounds === 310000;
+  // Accept hashes created by older documented versions of this project, which
+  // used 100,000 rounds. New hashes use 310,000 rounds (see README), while the
+  // upper bound prevents an accidentally malformed secret from tying up a
+  // Worker request for an excessive amount of time.
+  const iterationsValid = Number.isInteger(rounds) && rounds >= 100000 && rounds <= 2000000;
   const saltParsed = typeof saltText === "string" && saltText.length > 0;
   let expected;
   try { expected = decodeBase64(hashText); } catch { expected = null; }
