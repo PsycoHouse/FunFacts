@@ -130,6 +130,25 @@ test("login remains compatible with legacy 100000-round PBKDF2 hashes", async ()
   assert.equal((await worker.fetch(request("/login", { username: "friend", password: "password" }), env)).status, 200);
 });
 
+test("login ignores whitespace accidentally copied around configuration secrets", async () => {
+  const hash = await passwordHash("correct horse");
+  const env = {
+    ALLOWED_ORIGIN: origin,
+    APP_USER_ID: "\n friend \t",
+    APP_PASSWORD_HASH: `\r\n${hash}\n`,
+    APP_AUTH_SECRET: "  a-long-test-secret\n",
+    RATE_LIMITER: limiterNamespace()
+  };
+
+  const login = await worker.fetch(request("/login", { username: "friend", password: "correct horse" }), env);
+  assert.equal(login.status, 200);
+  const { token } = await login.json();
+  assert.ok(token);
+
+  const tokenPayload = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString());
+  assert.equal(tokenPayload.user, "friend");
+});
+
 test("login rejects PBKDF2 hashes with unsafe iteration counts", async () => {
   for (const iterations of [99999, 2000001]) {
     const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: await textSaltPasswordHash("password", "text-salt", iterations), APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };

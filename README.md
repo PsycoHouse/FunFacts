@@ -92,6 +92,8 @@ unset PASSWORD
 
 Nur die Ausgabe `pbkdf2_sha256$...` als `APP_PASSWORD_HASH` speichern. Salt und Rundenzahl dürfen Teil des Hashformats sein; das Klartextpasswort darf nirgends gespeichert werden.
 
+Beim Kopieren versehentlich mit übernommene Leerzeichen oder Zeilenumbrüche vor beziehungsweise nach `APP_USER_ID`, `APP_PASSWORD_HASH` und `APP_AUTH_SECRET` werden vom Worker ignoriert. Leerzeichen im tatsächlich eingegebenen Passwort bleiben dagegen immer erhalten und müssen exakt dem Passwort entsprechen, aus dem der Hash erzeugt wurde.
+
 Bereits mit einer älteren Projektversion erzeugte Hashes mit 100.000 Runden bleiben kompatibel, damit ein Worker-Update den vorhandenen Login nicht sperrt. Für neue Passwörter und bei der nächsten regulären Rotation sollte der obige Befehl mit 310.000 Runden verwendet werden.
 
 ### 11. GitHub Action starten
@@ -115,6 +117,8 @@ Diese URL an Freunde schicken – niemals die OpenAI-Zugangsdaten. Endnutzer ins
 ### 14. Login testen
 
 Mit `APP_USER_ID` und dem bei Schritt 10 verwendeten Passwort anmelden. Falsches Passwort muss abgewiesen werden. Nach Login einen Fact laden, kopieren, Verlauf zurücksetzen und abmelden. In DevTools darf unter Storage nur das Sitzungstoken in `sessionStorage` und die ID-Liste in `localStorage` erscheinen; kein API-Key oder Passwort. Im Netzwerk erscheinen nur Requests zum Worker, nie zu `api.openai.com`.
+
+Antwortet `/login` trotz neu gesetzter Zugangsdaten noch mit `401`, unter **Actions** zuerst prüfen, ob nach der letzten Secret-Änderung der Workflow **Deploy GitHub Pages and Worker** erfolgreich ausgeführt wurde. Repository-Secrets lösen allein keinen neuen Deploy aus; deshalb den Workflow über **Run workflow** erneut starten. Anschließend wegen des Login-Limits bis zu 15 Minuten warten, falls zuvor zehn Fehlversuche erfolgt sind. Die Worker-Logs zeigen nur booleans wie `username matches` und `password verification result`, niemals die Zugangsdaten selbst.
 
 ## Endpunkte
 

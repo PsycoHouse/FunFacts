@@ -30,10 +30,16 @@ export default {
 };
 
 async function login(request, env, headers) {
+  // GitHub/Cloudflare secrets are frequently pasted with a trailing newline.
+  // Ignore surrounding whitespace for identifiers and the serialized hash,
+  // but never alter the password entered by the user.
+  const configuredUser = normalizedSecret(env.APP_USER_ID);
+  const configuredPasswordHash = normalizedSecret(env.APP_PASSWORD_HASH);
+  const authSecret = normalizedSecret(env.APP_AUTH_SECRET);
   const configured = {
-    APP_USER_ID: typeof env.APP_USER_ID === "string" && env.APP_USER_ID.length > 0,
-    APP_PASSWORD_HASH: typeof env.APP_PASSWORD_HASH === "string" && env.APP_PASSWORD_HASH.length > 0,
-    APP_AUTH_SECRET: typeof env.APP_AUTH_SECRET === "string" && env.APP_AUTH_SECRET.length > 0
+    APP_USER_ID: configuredUser.length > 0,
+    APP_PASSWORD_HASH: configuredPasswordHash.length > 0,
+    APP_AUTH_SECRET: authSecret.length > 0
   };
   console.log(`APP_USER_ID vorhanden: ${configured.APP_USER_ID}`);
   console.log(`APP_PASSWORD_HASH vorhanden: ${configured.APP_PASSWORD_HASH}`);
@@ -53,18 +59,18 @@ async function login(request, env, headers) {
   }
   const usernameReceived = typeof body?.username === "string";
   const username = usernameReceived ? body.username.trim() : "";
-  const usernameOk = usernameReceived && await constantTimeEqual(username, env.APP_USER_ID);
+  const usernameOk = usernameReceived && await constantTimeEqual(username, configuredUser);
   console.log(`username received: ${usernameReceived}`);
   console.log(`username matches: ${usernameOk}`);
   const passwordReceived = typeof body?.password === "string";
-  const passwordVerified = await verifyPassword(passwordReceived ? body.password : "", env.APP_PASSWORD_HASH);
+  const passwordVerified = await verifyPassword(passwordReceived ? body.password : "", configuredPasswordHash);
   const passwordOk = passwordReceived && passwordVerified;
   if (!usernameOk || !passwordOk) {
     const result = await limit(env, "increment", key, LOGIN_LIMIT, 16 * 60);
     return result.allowed ? json({ error: "Ungültige Zugangsdaten" }, 401, headers) : json({ error: "Zu viele Login-Versuche. Bitte später erneut versuchen" }, 429, headers);
   }
   await limit(env, "delete", key, LOGIN_LIMIT, 1);
-  const token = await signToken({ user: env.APP_USER_ID, exp: Math.floor(Date.now() / 1000) + SESSION_SECONDS }, env.APP_AUTH_SECRET);
+  const token = await signToken({ user: configuredUser, exp: Math.floor(Date.now() / 1000) + SESSION_SECONDS }, authSecret);
   return json({ token, expiresIn: SESSION_SECONDS }, 200, headers);
 }
 
@@ -200,6 +206,7 @@ function decodeBase64(value) {
   if (typeof value !== "string" || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(value) || value.length % 4 === 1) throw new Error("Invalid base64");
   return fromBase64url(value);
 }
+function normalizedSecret(value) { return typeof value === "string" ? value.trim() : ""; }
 function originAllowed(origin, allowed) {
   if (!origin || !allowed) return false;
   try {
