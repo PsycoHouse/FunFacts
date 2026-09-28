@@ -94,7 +94,7 @@ Nur die Ausgabe `pbkdf2_sha256$...` als `APP_PASSWORD_HASH` speichern. Salt und 
 
 Beim Kopieren versehentlich mit übernommene Leerzeichen oder Zeilenumbrüche vor beziehungsweise nach `APP_USER_ID`, `APP_PASSWORD_HASH` und `APP_AUTH_SECRET` werden vom Worker ignoriert. Leerzeichen im tatsächlich eingegebenen Passwort bleiben dagegen immer erhalten und müssen exakt dem Passwort entsprechen, aus dem der Hash erzeugt wurde.
 
-Bereits mit einer älteren Projektversion erzeugte Hashes mit 100.000 Runden bleiben kompatibel, damit ein Worker-Update den vorhandenen Login nicht sperrt. Für neue Passwörter und bei der nächsten regulären Rotation sollte der obige Befehl mit 310.000 Runden verwendet werden.
+Der Worker dekodiert Salt und abgeleiteten Schlüssel strikt als Base64url-Bytes und leitet immer einen 32-Byte-Schlüssel ab. Das Format ist daher exakt `pbkdf2_sha256$iterations$base64url(salt)$base64url(derivedKey)`; Text-Salts und normales Base64 werden nicht akzeptiert.
 
 ### 11. GitHub Action starten
 

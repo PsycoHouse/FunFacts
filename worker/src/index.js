@@ -153,9 +153,9 @@ async function hmac(value, secret) {
   return new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
 }
 
-async function verifyPassword(password, stored) {
+export async function verifyPassword(password, stored) {
   const parts = typeof stored === "string" ? stored.split("$") : [];
-  const [algorithm, roundsText, saltText, hashText] = parts;
+  const [algorithm, roundsText, saltBase64Url, hashBase64Url] = parts;
   const rounds = Number(roundsText);
   const algorithmRecognized = algorithm === "pbkdf2_sha256";
   // Accept hashes created by older documented versions of this project, which
@@ -163,10 +163,12 @@ async function verifyPassword(password, stored) {
   // upper bound prevents an accidentally malformed secret from tying up a
   // Worker request for an excessive amount of time.
   const iterationsValid = Number.isInteger(rounds) && rounds >= 100000 && rounds <= 2000000;
-  const saltParsed = typeof saltText === "string" && saltText.length > 0;
+  let salt;
   let expected;
-  try { expected = decodeBase64(hashText); } catch { expected = null; }
-  const storedHashParsed = Boolean(expected?.length);
+  try { salt = base64urlToBytes(saltBase64Url); } catch { salt = null; }
+  try { expected = base64urlToBytes(hashBase64Url); } catch { expected = null; }
+  const saltParsed = Boolean(salt?.length);
+  const storedHashParsed = expected?.length === 32;
   const formatValid = parts.length === 4 && algorithmRecognized && iterationsValid && saltParsed && storedHashParsed;
 
   console.log(`hash format valid: ${formatValid}`);
@@ -179,15 +181,8 @@ async function verifyPassword(password, stored) {
   if (formatValid) {
     try {
       const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-      // Text salts are used by the common pbkdf2_sha256 format (including
-      // Django). For backwards compatibility, also accept the binary,
-      // base64url-encoded salt produced by earlier versions of this project.
-      const salts = [encoder.encode(saltText)];
-      try { salts.push(decodeBase64(saltText)); } catch { /* Not an encoded salt. */ }
-      for (const salt of salts) {
-        const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: rounds }, key, expected.length * 8);
-        verified = constantTimeBytes(new Uint8Array(bits), expected) || verified;
-      }
+      const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: rounds }, key, 256);
+      verified = constantTimeBytes(new Uint8Array(bits), expected);
     } catch { verified = false; }
   }
   console.log(`password verification result: ${verified}`);
@@ -201,10 +196,18 @@ async function constantTimeEqual(a, b) {
 }
 function constantTimeBytes(a, b) { let diff = a.length ^ b.length; const length = Math.max(a.length, b.length); for (let i = 0; i < length; i += 1) diff |= (a[i] || 0) ^ (b[i] || 0); return diff === 0; }
 function base64url(bytes) { let value = ""; for (const byte of bytes) value += String.fromCharCode(byte); return btoa(value).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_"); }
-function fromBase64url(value) { const normalized = value.replace(/-/g, "+").replace(/_/g, "/"); const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")); return Uint8Array.from(binary, (char) => char.charCodeAt(0)); }
-function decodeBase64(value) {
-  if (typeof value !== "string" || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(value) || value.length % 4 === 1) throw new Error("Invalid base64");
-  return fromBase64url(value);
+function fromBase64url(value) { return base64urlToBytes(value); }
+export function base64urlToBytes(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+={0,2}$/.test(value)) throw new Error("Invalid base64url");
+  const unpadded = value.replace(/=+$/, "");
+  const remainder = unpadded.length % 4;
+  if (remainder === 1) throw new Error("Invalid base64url length");
+  const requiredPadding = (4 - remainder) % 4;
+  const suppliedPadding = value.length - unpadded.length;
+  if (suppliedPadding !== 0 && suppliedPadding !== requiredPadding) throw new Error("Invalid base64url padding");
+  const normalized = unpadded.replace(/-/g, "+").replace(/_/g, "/").padEnd(unpadded.length + requiredPadding, "=");
+  const binary = atob(normalized);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 function normalizedSecret(value) { return typeof value === "string" ? value.trim() : ""; }
 function originAllowed(origin, allowed) {

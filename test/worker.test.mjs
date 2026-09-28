@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker, { RateLimiter } from "../worker/src/index.js";
-import { webcrypto } from "node:crypto";
+import worker, { base64urlToBytes, RateLimiter, verifyPassword } from "../worker/src/index.js";
+import { pbkdf2Sync, randomBytes, webcrypto } from "node:crypto";
 
 globalThis.crypto ||= webcrypto;
 const origin = "https://example.github.io";
@@ -21,15 +21,9 @@ function limiterNamespace() {
 
 function b64url(bytes) { return Buffer.from(bytes).toString("base64url"); }
 async function passwordHash(password) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const hash = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 310000 }, key, 256);
-  return `pbkdf2_sha256$310000$${b64url(salt)}$${b64url(new Uint8Array(hash))}`;
-}
-async function textSaltPasswordHash(password, salt = "text-salt", iterations = 310000) {
-  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const hash = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: encoder.encode(salt), iterations }, key, 256);
-  return `pbkdf2_sha256$${iterations}$${salt}$${Buffer.from(hash).toString("base64")}`;
+  const salt = randomBytes(16);
+  const hash = pbkdf2Sync(Buffer.from(password), salt, 310000, 32, "sha256");
+  return `pbkdf2_sha256$310000$${salt.toString("base64url")}$${hash.toString("base64url")}`;
 }
 async function signedToken(payload, secret) {
   const body = b64url(encoder.encode(JSON.stringify(payload)));
@@ -116,18 +110,14 @@ test("authentication, token validation, daily limit and protected OpenAI call", 
   } finally { globalThis.fetch = originalFetch; Math.random = originalRandom; }
 });
 
-test("login supports a 310000-round text-salt format and trims only the username", async () => {
-  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: await textSaltPasswordHash(" correct horse "), APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };
-  const login = await worker.fetch(request("/login", { username: "  friend\t", password: " correct horse " }), env);
-  assert.equal(login.status, 200);
-  assert.ok((await login.json()).token);
-  assert.equal((await worker.fetch(request("/login", { username: "FRIEND", password: " correct horse " }), env)).status, 401);
-  assert.equal((await worker.fetch(request("/login", { username: "friend", password: "correct horse" }), env)).status, 401);
-});
+test("verifies Node.js PBKDF2 hashes with decoded base64url bytes", async () => {
+  const hash = await passwordHash(" correct horse ");
+  assert.equal(await verifyPassword(" correct horse ", hash), true);
+  assert.equal(await verifyPassword("correct horse", hash), false);
 
-test("login remains compatible with legacy 100000-round PBKDF2 hashes", async () => {
-  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: await textSaltPasswordHash("password", "text-salt", 100000), APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };
-  assert.equal((await worker.fetch(request("/login", { username: "friend", password: "password" }), env)).status, 200);
+  assert.deepEqual(base64urlToBytes("-___"), Uint8Array.of(251, 255, 255));
+  assert.deepEqual(base64urlToBytes("AQI="), Uint8Array.of(1, 2));
+  assert.throws(() => base64urlToBytes("AQI+"), /Invalid base64url/);
 });
 
 test("login ignores whitespace accidentally copied around configuration secrets", async () => {
@@ -151,7 +141,9 @@ test("login ignores whitespace accidentally copied around configuration secrets"
 
 test("login rejects PBKDF2 hashes with unsafe iteration counts", async () => {
   for (const iterations of [99999, 2000001]) {
-    const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: await textSaltPasswordHash("password", "text-salt", iterations), APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };
+    const validHash = await passwordHash("password");
+    const unsafeHash = validHash.replace("$310000$", `$${iterations}$`);
+    const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: unsafeHash, APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };
     assert.equal((await worker.fetch(request("/login", { username: "friend", password: "password" }), env)).status, 401);
   }
 });
