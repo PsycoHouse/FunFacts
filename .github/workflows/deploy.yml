@@ -3,6 +3,8 @@ name: Deploy GitHub Pages and Worker
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +17,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Tests und Syntaxprüfungen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Automatisierte Tests ausführen
+        run: npm test
+      - name: JavaScript-Syntax prüfen
+        run: |
+          node --check app.js
+          node --check worker/src/index.js
+
   deploy-worker:
+    if: github.event_name != 'pull_request'
+    needs: validate
     runs-on: ubuntu-latest
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -44,6 +63,8 @@ jobs:
           printf '%s' "$APP_AUTH_SECRET" | npx --yes wrangler@4 secret put APP_AUTH_SECRET --name "$WORKER_NAME"
 
   deploy-pages:
+    if: github.event_name != 'pull_request'
+    needs: validate
     runs-on: ubuntu-latest
     environment:
       name: github-pages
