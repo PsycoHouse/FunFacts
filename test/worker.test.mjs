@@ -43,6 +43,40 @@ test("CORS accepts GitHub origins regardless of hostname casing", async () => {
 
   assert.equal(response.status, 204);
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), origin);
+  assert.equal(response.headers.get("Access-Control-Allow-Methods"), "GET, POST, OPTIONS");
+  assert.equal(response.headers.get("Access-Control-Allow-Headers"), "Content-Type, Authorization");
+  assert.equal(response.headers.get("Access-Control-Max-Age"), "86400");
+  assert.equal(response.headers.get("Vary"), "Origin");
+});
+
+test("CORS defaults to the production Pages origin and is present on errors", async () => {
+  const productionOrigin = "https://psycohouse.github.io";
+  const preflight = await worker.fetch(new Request("https://worker.test/login", {
+    method: "OPTIONS",
+    headers: {
+      Origin: productionOrigin,
+      "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Headers": "content-type,authorization"
+    }
+  }), {});
+
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("Access-Control-Allow-Origin"), productionOrigin);
+
+  const cases = [
+    new Request("https://worker.test/fact", { method: "POST", headers: { Origin: productionOrigin, "Content-Type": "application/json" }, body: "{" }),
+    new Request("https://worker.test/fact", { method: "POST", headers: { Origin: productionOrigin, "Content-Type": "application/json" }, body: "{}" }),
+    new Request("https://worker.test/login", { method: "POST", headers: { Origin: productionOrigin, "Content-Type": "application/json" }, body: "{}" }),
+    new Request("https://worker.test/login", { method: "POST", headers: { Origin: "https://attacker.example", "Content-Type": "application/json" }, body: "{}" })
+  ];
+  const expectedStatuses = [500, 500, 500, 403];
+
+  for (const [index, apiRequest] of cases.entries()) {
+    const response = await worker.fetch(apiRequest, {});
+    assert.equal(response.status, expectedStatuses[index]);
+    assert.equal(response.headers.get("Access-Control-Allow-Origin"), productionOrigin);
+    assert.notEqual(response.headers.get("Access-Control-Allow-Origin"), "*");
+  }
 });
 
 test("authentication, token validation, daily limit and protected OpenAI call", async () => {
