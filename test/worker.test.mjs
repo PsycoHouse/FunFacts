@@ -116,10 +116,10 @@ test("authentication, token validation, daily limit and protected OpenAI call", 
   const originalRandom = Math.random;
   Math.random = () => 0.1; // Tiere
   try {
-    for (let used = 1; used <= 20; used += 1) {
+    for (let used = 1; used <= 50; used += 1) {
       const response = await worker.fetch(request("/fact", {}, token), env);
       assert.equal(response.status, 200);
-      assert.equal((await response.json()).remaining, 20 - used);
+      assert.equal((await response.json()).remaining, 50 - used);
     }
     const limited = await worker.fetch(request("/fact", {}, token), env);
     assert.equal(limited.status, 429);
