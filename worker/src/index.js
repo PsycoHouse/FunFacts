@@ -30,7 +30,15 @@ export default {
 };
 
 async function login(request, env, headers) {
-  if (!env.APP_USER_ID || !env.APP_PASSWORD_HASH || !env.APP_AUTH_SECRET || !env.RATE_LIMITER) return json({ error: "Server ist nicht konfiguriert" }, 500, headers);
+  const configured = {
+    APP_USER_ID: typeof env.APP_USER_ID === "string" && env.APP_USER_ID.length > 0,
+    APP_PASSWORD_HASH: typeof env.APP_PASSWORD_HASH === "string" && env.APP_PASSWORD_HASH.length > 0,
+    APP_AUTH_SECRET: typeof env.APP_AUTH_SECRET === "string" && env.APP_AUTH_SECRET.length > 0
+  };
+  console.log(`APP_USER_ID vorhanden: ${configured.APP_USER_ID}`);
+  console.log(`APP_PASSWORD_HASH vorhanden: ${configured.APP_PASSWORD_HASH}`);
+  console.log(`APP_AUTH_SECRET vorhanden: ${configured.APP_AUTH_SECRET}`);
+  if (!configured.APP_USER_ID || !configured.APP_PASSWORD_HASH || !configured.APP_AUTH_SECRET || !env.RATE_LIMITER) return json({ error: "Server ist nicht konfiguriert" }, 500, headers);
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   const window = Math.floor(Date.now() / (15 * 60 * 1000));
   const key = `login:${ip}:${window}`;
@@ -38,9 +46,19 @@ async function login(request, env, headers) {
   if (!current.allowed) return json({ error: "Zu viele Login-Versuche. Bitte später erneut versuchen" }, 429, headers);
 
   let body;
-  try { body = await request.json(); } catch { return json({ error: "Ungültige Zugangsdaten" }, 401, headers); }
-  const usernameOk = typeof body?.username === "string" && await constantTimeEqual(body.username, env.APP_USER_ID);
-  const passwordOk = typeof body?.password === "string" && await verifyPassword(body.password, env.APP_PASSWORD_HASH);
+  try { body = await request.json(); } catch {
+    console.log("username received: false");
+    console.log("username matches: false");
+    return json({ error: "Ungültige Zugangsdaten" }, 401, headers);
+  }
+  const usernameReceived = typeof body?.username === "string";
+  const username = usernameReceived ? body.username.trim() : "";
+  const usernameOk = usernameReceived && await constantTimeEqual(username, env.APP_USER_ID);
+  console.log(`username received: ${usernameReceived}`);
+  console.log(`username matches: ${usernameOk}`);
+  const passwordReceived = typeof body?.password === "string";
+  const passwordVerified = await verifyPassword(passwordReceived ? body.password : "", env.APP_PASSWORD_HASH);
+  const passwordOk = passwordReceived && passwordVerified;
   if (!usernameOk || !passwordOk) {
     const result = await limit(env, "increment", key, LOGIN_LIMIT, 16 * 60);
     return result.allowed ? json({ error: "Ungültige Zugangsdaten" }, 401, headers) : json({ error: "Zu viele Login-Versuche. Bitte später erneut versuchen" }, 429, headers);
@@ -130,14 +148,40 @@ async function hmac(value, secret) {
 }
 
 async function verifyPassword(password, stored) {
-  try {
-    const [algorithm, roundsText, saltText, hashText, extra] = stored.split("$");
-    const rounds = Number(roundsText);
-    if (algorithm !== "pbkdf2_sha256" || extra || !Number.isInteger(rounds) || rounds < 100000 || rounds > 2000000) return false;
-    const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-    const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: fromBase64url(saltText), iterations: rounds }, key, fromBase64url(hashText).length * 8);
-    return constantTimeBytes(new Uint8Array(bits), fromBase64url(hashText));
-  } catch { return false; }
+  const parts = typeof stored === "string" ? stored.split("$") : [];
+  const [algorithm, roundsText, saltText, hashText] = parts;
+  const rounds = Number(roundsText);
+  const algorithmRecognized = algorithm === "pbkdf2_sha256";
+  const iterationsValid = Number.isInteger(rounds) && rounds === 310000;
+  const saltParsed = typeof saltText === "string" && saltText.length > 0;
+  let expected;
+  try { expected = decodeBase64(hashText); } catch { expected = null; }
+  const storedHashParsed = Boolean(expected?.length);
+  const formatValid = parts.length === 4 && algorithmRecognized && iterationsValid && saltParsed && storedHashParsed;
+
+  console.log(`hash format valid: ${formatValid}`);
+  console.log(`algorithm recognized: ${algorithmRecognized}`);
+  console.log(`iterations: ${Number.isInteger(rounds) ? rounds : 0}`);
+  console.log(`salt parsed: ${saltParsed}`);
+  console.log(`stored hash parsed: ${storedHashParsed}`);
+
+  let verified = false;
+  if (formatValid) {
+    try {
+      const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
+      // Text salts are used by the common pbkdf2_sha256 format (including
+      // Django). For backwards compatibility, also accept the binary,
+      // base64url-encoded salt produced by earlier versions of this project.
+      const salts = [encoder.encode(saltText)];
+      try { salts.push(decodeBase64(saltText)); } catch { /* Not an encoded salt. */ }
+      for (const salt of salts) {
+        const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: rounds }, key, expected.length * 8);
+        verified = constantTimeBytes(new Uint8Array(bits), expected) || verified;
+      }
+    } catch { verified = false; }
+  }
+  console.log(`password verification result: ${verified}`);
+  return verified;
 }
 
 async function constantTimeEqual(a, b) {
@@ -148,6 +192,10 @@ async function constantTimeEqual(a, b) {
 function constantTimeBytes(a, b) { let diff = a.length ^ b.length; const length = Math.max(a.length, b.length); for (let i = 0; i < length; i += 1) diff |= (a[i] || 0) ^ (b[i] || 0); return diff === 0; }
 function base64url(bytes) { let value = ""; for (const byte of bytes) value += String.fromCharCode(byte); return btoa(value).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_"); }
 function fromBase64url(value) { const normalized = value.replace(/-/g, "+").replace(/_/g, "/"); const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")); return Uint8Array.from(binary, (char) => char.charCodeAt(0)); }
+function decodeBase64(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(value) || value.length % 4 === 1) throw new Error("Invalid base64");
+  return fromBase64url(value);
+}
 function originAllowed(origin, allowed) {
   if (!origin || !allowed) return false;
   try {
