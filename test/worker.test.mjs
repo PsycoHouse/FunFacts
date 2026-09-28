@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { base64urlToBytes, RateLimiter, verifyPassword } from "../worker/src/index.js";
 import { pbkdf2Sync, randomBytes, webcrypto } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 globalThis.crypto ||= webcrypto;
 const origin = "https://example.github.io";
@@ -33,6 +34,27 @@ async function signedToken(payload, secret) {
 function request(path, body = {}, token = "") {
   return new Request(`https://worker.test${path}`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
 }
+
+test("frontend sends the documented JSON login fields and content type", async () => {
+  const source = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(source, /headers:\s*\{\s*"Content-Type":\s*"application\/json"/);
+  assert.match(source, /api\("\/login",\s*\{\s*body:\s*\{\s*username:[^,]+,\s*password:/);
+});
+
+test("login distinguishes malformed input from authentication configuration errors", async () => {
+  const validEnv = { ALLOWED_ORIGIN: origin, APP_USER_ID: "AJT", APP_PASSWORD_HASH: await passwordHash("password"), APP_AUTH_SECRET: "secret", RATE_LIMITER: limiterNamespace() };
+  const malformed = new Request("https://worker.test/login", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{" });
+  assert.equal((await worker.fetch(malformed, validEnv)).status, 401);
+  assert.equal((await worker.fetch(request("/login", { username: "AJT", password: "password", extra: true }), validEnv)).status, 401);
+
+  const missingUser = { ...validEnv, APP_USER_ID: undefined };
+  const response = await worker.fetch(request("/login", { username: "AJT", password: "password" }), missingUser);
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: "Authentication configuration error" });
+
+  const wrongContentType = new Request("https://worker.test/login", { method: "POST", headers: { Origin: origin, "Content-Type": "text/plain" }, body: "{}" });
+  assert.equal((await worker.fetch(wrongContentType, validEnv)).status, 415);
+});
 
 test("CORS accepts GitHub origins regardless of hostname casing", async () => {
   const response = await worker.fetch(new Request("https://worker.test/login", {
@@ -79,16 +101,16 @@ test("CORS defaults to the production Pages origin and is present on errors", as
 });
 
 test("authentication, token validation, daily limit and protected OpenAI call", async () => {
-  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: await passwordHash("correct horse"), APP_AUTH_SECRET: "a-long-test-secret", OPENAI_API_KEY: "server-only", RATE_LIMITER: limiterNamespace() };
+  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "AJT", APP_PASSWORD_HASH: await passwordHash("correct horse"), APP_AUTH_SECRET: "a-long-test-secret", OPENAI_API_KEY: "server-only", RATE_LIMITER: limiterNamespace() };
   assert.equal((await worker.fetch(request("/fact"), env)).status, 401);
-  assert.equal((await worker.fetch(request("/login", { username: "friend", password: "wrong" }), env)).status, 401);
+  assert.equal((await worker.fetch(request("/login", { username: "AJT", password: "wrong" }), env)).status, 401);
 
-  const login = await worker.fetch(request("/login", { username: "friend", password: "correct horse" }), env);
+  const login = await worker.fetch(request("/login", { username: "AJT", password: "correct horse" }), env);
   assert.equal(login.status, 200);
   const { token } = await login.json();
   assert.ok(token);
   assert.equal((await worker.fetch(request("/fact", {}, `${token}x`), env)).status, 401);
-  const expired = await signedToken({ user: "friend", exp: Math.floor(Date.now() / 1000) - 1 }, env.APP_AUTH_SECRET);
+  const expired = await signedToken({ user: "AJT", exp: Math.floor(Date.now() / 1000) - 1 }, env.APP_AUTH_SECRET);
   assert.equal((await worker.fetch(request("/fact", {}, expired), env)).status, 401);
 
   const originalFetch = globalThis.fetch;
@@ -120,37 +142,35 @@ test("verifies Node.js PBKDF2 hashes with decoded base64url bytes", async () => 
   assert.throws(() => base64urlToBytes("AQI+"), /Invalid base64url/);
 });
 
-test("login ignores whitespace accidentally copied around configuration secrets", async () => {
+test("login reports whitespace around APP_USER_ID as a configuration error", async () => {
   const hash = await passwordHash("correct horse");
   const env = {
     ALLOWED_ORIGIN: origin,
-    APP_USER_ID: "\n friend \t",
+    APP_USER_ID: "\n AJT \t",
     APP_PASSWORD_HASH: `\r\n${hash}\n`,
     APP_AUTH_SECRET: "  a-long-test-secret\n",
     RATE_LIMITER: limiterNamespace()
   };
 
-  const login = await worker.fetch(request("/login", { username: "friend", password: "correct horse" }), env);
-  assert.equal(login.status, 200);
-  const { token } = await login.json();
-  assert.ok(token);
-
-  const tokenPayload = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString());
-  assert.equal(tokenPayload.user, "friend");
+  const login = await worker.fetch(request("/login", { username: "AJT", password: "correct horse" }), env);
+  assert.equal(login.status, 500);
+  assert.deepEqual(await login.json(), { error: "Authentication configuration error" });
 });
 
 test("login rejects PBKDF2 hashes with unsafe iteration counts", async () => {
   for (const iterations of [99999, 2000001]) {
     const validHash = await passwordHash("password");
     const unsafeHash = validHash.replace("$310000$", `$${iterations}$`);
-    const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: unsafeHash, APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };
-    assert.equal((await worker.fetch(request("/login", { username: "friend", password: "password" }), env)).status, 401);
+    const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "AJT", APP_PASSWORD_HASH: unsafeHash, APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };
+    const response = await worker.fetch(request("/login", { username: "AJT", password: "password" }), env);
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: "Authentication configuration error" });
   }
 });
 
 test("location facts validate coordinates and add local context without exposing them in the result", async () => {
-  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_AUTH_SECRET: "secret", OPENAI_API_KEY: "server-only", RATE_LIMITER: limiterNamespace() };
-  const token = await signedToken({ user: "friend", exp: Math.floor(Date.now() / 1000) + 60 }, env.APP_AUTH_SECRET);
+  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "AJT", APP_AUTH_SECRET: "secret", OPENAI_API_KEY: "server-only", RATE_LIMITER: limiterNamespace() };
+  const token = await signedToken({ user: "AJT", exp: Math.floor(Date.now() / 1000) + 60 }, env.APP_AUTH_SECRET);
   assert.equal((await worker.fetch(request("/fact", { location: { latitude: 91, longitude: 13 } }, token), env)).status, 400);
   assert.equal((await worker.fetch(request("/fact", { location: { latitude: 52, longitude: 13 }, extra: true }, token), env)).status, 400);
 
