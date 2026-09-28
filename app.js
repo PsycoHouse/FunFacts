@@ -19,6 +19,7 @@ let token = sessionStorage.getItem(SESSION_KEY) || "";
 let seenIds = loadSeenIds();
 let currentFact = "";
 let loading = false;
+let location = null;
 
 showAuthenticated(Boolean(token));
 updateHistoryCounter();
@@ -81,7 +82,7 @@ async function nextFact() {
   setLoading(true); statusElement.textContent = "";
   try {
     for (let attempt = 0; attempt <= MAX_DUPLICATE_RETRIES; attempt += 1) {
-      const data = await api("/fact");
+      const data = await api("/fact", { body: location ? { location } : {} });
       updateDailyCounter(data.remaining);
       if (seenIds.has(data.id)) {
         if (attempt === MAX_DUPLICATE_RETRIES) throw new Error("Es wurden nur bekannte Facts gefunden. Versuche es später erneut.");
@@ -105,11 +106,58 @@ async function nextFact() {
   } finally { setLoading(false); }
 }
 
+function updateLocationControl() {
+  const enabled = Boolean(location);
+  const button = $("#location-button");
+  button.setAttribute("aria-pressed", String(enabled));
+  button.textContent = enabled ? "Deaktivieren" : "Aktivieren";
+  $("#location-description").textContent = enabled ? "Aktiv – der nächste Fact bezieht sich auf deine Umgebung" : "Standort ist ausgeschaltet";
+}
+
+function enableLocation() {
+  if (!navigator.geolocation) {
+    statusElement.textContent = "Dein Browser unterstützt keine Standortabfrage.";
+    return;
+  }
+  const button = $("#location-button");
+  button.disabled = true;
+  button.textContent = "Wird ermittelt …";
+  statusElement.textContent = "";
+  navigator.geolocation.getCurrentPosition(({ coords }) => {
+    // Auf drei Nachkommastellen begrenzen, damit kein unnötig genauer Standort übertragen wird.
+    location = { latitude: Number(coords.latitude.toFixed(3)), longitude: Number(coords.longitude.toFixed(3)) };
+    updateLocationControl();
+    button.disabled = false;
+    statusElement.textContent = "Standort aktiviert. Dein nächster Fact kommt aus deiner Nähe.";
+  }, (error) => {
+    location = null;
+    updateLocationControl();
+    button.disabled = false;
+    statusElement.textContent = error.code === error.PERMISSION_DENIED
+      ? "Standortzugriff wurde abgelehnt. Du kannst ihn in den Browser-Einstellungen erlauben."
+      : "Dein Standort konnte nicht ermittelt werden. Bitte versuche es erneut.";
+  }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
+}
+
 function updateDailyCounter(remaining) { if (Number.isInteger(remaining)) $("#daily-counter").textContent = `${20 - remaining} / 20 heute genutzt`; }
 function updateHistoryCounter() { $("#counter").textContent = `${seenIds.size} Facts insgesamt gesehen`; }
-function logout(message = "") { token = ""; sessionStorage.removeItem(SESSION_KEY); showAuthenticated(false); loginStatus.textContent = message; }
+function logout(message = "") {
+  token = "";
+  location = null;
+  sessionStorage.removeItem(SESSION_KEY);
+  updateLocationControl();
+  showAuthenticated(false);
+  loginStatus.textContent = message;
+}
 
 factButton.addEventListener("click", nextFact);
+$("#location-button").addEventListener("click", () => {
+  if (location) {
+    location = null;
+    updateLocationControl();
+    statusElement.textContent = "Standort deaktiviert.";
+  } else enableLocation();
+});
 $("#logout-button").addEventListener("click", () => logout());
 document.addEventListener("keydown", (event) => {
   if (!appView.hidden && (event.key === "Enter" || event.key === " ") && !["INPUT", "BUTTON", "TEXTAREA"].includes(document.activeElement.tagName)) { event.preventDefault(); nextFact(); }

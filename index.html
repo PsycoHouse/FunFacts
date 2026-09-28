@@ -34,6 +34,17 @@
           <p id="fact" class="fact">Bereit für etwas Neues?</p>
           <button id="copy-button" class="text-button" type="button" hidden>Fact kopieren</button>
         </div>
+        <div class="location-card">
+          <div class="location-copy">
+            <span class="location-icon" aria-hidden="true">⌖</span>
+            <div>
+              <strong>Fakten aus deiner Nähe</strong>
+              <span id="location-description">Standort ist ausgeschaltet</span>
+            </div>
+          </div>
+          <button id="location-button" class="location-button" type="button" aria-pressed="false">Aktivieren</button>
+        </div>
+        <p class="privacy-note">Dein ungefährer Standort wird nur beim Abrufen eines Facts übertragen und nicht gespeichert.</p>
         <p id="status" class="status" role="alert"></p>
         <button id="fact-button" class="primary" type="button">NÄCHSTER FACT</button>
         <p id="daily-counter" class="counter">– / 20 heute genutzt</p>

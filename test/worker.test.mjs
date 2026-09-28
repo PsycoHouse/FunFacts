@@ -66,3 +66,23 @@ test("authentication, token validation, daily limit and protected OpenAI call", 
     assert.deepEqual(await limited.json(), { error: "Tageslimit erreicht", remaining: 0 });
   } finally { globalThis.fetch = originalFetch; Math.random = originalRandom; }
 });
+
+test("location facts validate coordinates and add local context without exposing them in the result", async () => {
+  const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_AUTH_SECRET: "secret", OPENAI_API_KEY: "server-only", RATE_LIMITER: limiterNamespace() };
+  const token = await signedToken({ user: "friend", exp: Math.floor(Date.now() / 1000) + 60 }, env.APP_AUTH_SECRET);
+  assert.equal((await worker.fetch(request("/fact", { location: { latitude: 91, longitude: 13 } }, token), env)).status, 400);
+  assert.equal((await worker.fetch(request("/fact", { location: { latitude: 52, longitude: 13 }, extra: true }, token), env)).status, 400);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    const payload = JSON.parse(init.body);
+    assert.match(payload.input, /52\.52, 13\.405/);
+    assert.match(payload.input, /category muss exakt Vor Ort sein/);
+    return new Response(JSON.stringify({ output_text: JSON.stringify({ id: "berlin_museum_island", fact: "Die Berliner Museumsinsel gehört zum UNESCO-Welterbe.", category: "Vor Ort" }) }), { status: 200 });
+  };
+  try {
+    const response = await worker.fetch(request("/fact", { location: { latitude: 52.52, longitude: 13.405 } }, token), env);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).category, "Vor Ort");
+  } finally { globalThis.fetch = originalFetch; }
+});
