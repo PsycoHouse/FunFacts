@@ -125,9 +125,16 @@ test("login supports a 310000-round text-salt format and trims only the username
   assert.equal((await worker.fetch(request("/login", { username: "friend", password: "correct horse" }), env)).status, 401);
 });
 
-test("login rejects PBKDF2 hashes with parameters other than 310000 rounds", async () => {
+test("login remains compatible with legacy 100000-round PBKDF2 hashes", async () => {
   const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: await textSaltPasswordHash("password", "text-salt", 100000), APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };
-  assert.equal((await worker.fetch(request("/login", { username: "friend", password: "password" }), env)).status, 401);
+  assert.equal((await worker.fetch(request("/login", { username: "friend", password: "password" }), env)).status, 200);
+});
+
+test("login rejects PBKDF2 hashes with unsafe iteration counts", async () => {
+  for (const iterations of [99999, 2000001]) {
+    const env = { ALLOWED_ORIGIN: origin, APP_USER_ID: "friend", APP_PASSWORD_HASH: await textSaltPasswordHash("password", "text-salt", iterations), APP_AUTH_SECRET: "a-long-test-secret", RATE_LIMITER: limiterNamespace() };
+    assert.equal((await worker.fetch(request("/login", { username: "friend", password: "password" }), env)).status, 401);
+  }
 });
 
 test("location facts validate coordinates and add local context without exposing them in the result", async () => {

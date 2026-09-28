@@ -92,6 +92,8 @@ unset PASSWORD
 
 Nur die Ausgabe `pbkdf2_sha256$...` als `APP_PASSWORD_HASH` speichern. Salt und Rundenzahl dürfen Teil des Hashformats sein; das Klartextpasswort darf nirgends gespeichert werden.
 
+Bereits mit einer älteren Projektversion erzeugte Hashes mit 100.000 Runden bleiben kompatibel, damit ein Worker-Update den vorhandenen Login nicht sperrt. Für neue Passwörter und bei der nächsten regulären Rotation sollte der obige Befehl mit 310.000 Runden verwendet werden.
+
 ### 11. GitHub Action starten
 
 Nach einem Push auf `main` startet `.github/workflows/deploy.yml`. Alternativ **Actions → Deploy GitHub Pages and Worker → Run workflow**. Der Job setzt Worker-Secrets, deployed Worker samt Durable Object und veröffentlicht ausschließlich `index.html`, `style.css`, `app.js` auf Pages.
