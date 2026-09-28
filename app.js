@@ -1,5 +1,5 @@
 // Öffentliche Worker-URL (kein Secret). Vor dem Deployment einmal anpassen.
-const API_URL = "https://random-fact-api.YOUR-SUBDOMAIN.workers.dev";
+const API_URL = "https://random-fact-api.gamer-33.workers.dev";
 const SESSION_KEY = "random-fact-session-v1";
 const HISTORY_KEY = "random-fact-seen-ids-v1";
 const MAX_DUPLICATE_RETRIES = 3;
